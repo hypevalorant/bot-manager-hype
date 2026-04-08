@@ -1,0 +1,36 @@
+{
+  "slug": "bot-ticket-hype",
+  "name": "Bot Ticket Hype",
+  "runtime": {
+    "type": "docker",
+    "entrypoint": "node dist/index.js",
+    "healthcheckPath": "/healthz",
+    "heartbeatIntervalMs": 60000
+  },
+  "provisioning": {
+    "appPoolKey": "bot-ticket-hype",
+    "dedicatedDiscordAppPerCustomer": true,
+    "graceDays": 3
+  },
+  "plans": [
+    {
+      "code": "weekly",
+      "label": "Semanal",
+      "interval": "weekly",
+      "priceCents": 1490,
+      "currency": "BRL"
+    },
+    {
+      "code": "monthly",
+      "label": "Mensal",
+      "interval": "monthly",
+      "priceCents": 4990,
+      "currency": "BRL"
+    }
+  ],
+  "features": {
+    "customBranding": false,
+    "multiGuild": false,
+    "transcripts": true
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "bot-manager-saas",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Manager SaaS para vender bots do Discord por assinatura sem expor a source.",
+  "scripts": {
+    "dev": "node --watch dist/server.js",
+    "build": "node scripts/verify-runtime.js",
+    "start": "node dist/server.js",
+    "package:squarecloud": "powershell -ExecutionPolicy Bypass -File scripts/package-squarecloud.ps1"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.0.1",
+    "adm-zip": "^0.5.16",
+    "discord.js": "^14.26.2",
+    "fastify": "^5.2.1",
+    "pg": "^8.20.0",
+    "yazl": "^3.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "@types/yazl": "^3.3.0",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  }
+}

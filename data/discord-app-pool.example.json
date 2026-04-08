@@ -1,0 +1,16 @@
+{
+  "discordApps": [
+    {
+      "productSlug": "bot-ticket-hype",
+      "applicationId": "123456789012345678",
+      "clientId": "123456789012345678",
+      "appName": "Bot Ticket Hype 01",
+      "botToken": "COLE_O_TOKEN_REAL_DO_BOT_AQUI",
+      "defaultGuildId": "",
+      "runtimeEnv": {
+        "OPENAI_MODEL": "gpt-4o-mini",
+        "TRANSCRIPT_VIEWER_ENABLED": "true"
+      }
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+.env
+.env.local
+.env.*.local
+!.env.example
+secrets/
+data/discord-app-pool.json
+deploy/
+runtime-artifacts/generated/
