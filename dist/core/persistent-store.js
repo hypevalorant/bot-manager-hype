@@ -10,7 +10,9 @@ const SNAPSHOT_KEY = "default";
 class PersistentStore {
     databaseUrl;
     pool;
+    schemaName;
     tableName;
+    tableRef;
     lastPersistedHash = null;
     customers = [];
     products = [];
@@ -25,7 +27,9 @@ class PersistentStore {
     managerRuntimeConfig = (0, store_js_1.createEmptyManagerRuntimeConfig)();
     constructor(databaseUrl) {
         this.databaseUrl = databaseUrl;
+        this.schemaName = this.resolveSchemaName();
         this.tableName = this.resolveTableName();
+        this.tableRef = `${this.schemaName}.${this.tableName}`;
         this.pool = new pg_1.Pool({
             connectionString: databaseUrl,
             ssl: this.resolveSslConfig(),
@@ -77,7 +81,17 @@ class PersistentStore {
         if (!configuredPath) {
             return null;
         }
-        const resolvedPath = (0, node_path_1.resolve)(configuredPath);
+        const candidatePaths = [
+            (0, node_path_1.resolve)(configuredPath),
+            (0, node_path_1.resolve)("/application", configuredPath),
+            (0, node_path_1.resolve)((0, node_path_1.dirname)(process.argv[1] ?? ""), "..", configuredPath),
+        ];
+        const resolvedPath = candidatePaths.find((candidatePath, index) => {
+            if (!candidatePath || candidatePath === candidatePaths[index - 1]) {
+                return false;
+            }
+            return (0, node_fs_1.existsSync)(candidatePath);
+        }) ?? candidatePaths[0];
         if (!(0, node_fs_1.existsSync)(resolvedPath)) {
             throw new Error(`Arquivo SSL do banco nao encontrado em ${resolvedPath} (${pathEnvKey}).`);
         }
@@ -87,9 +101,14 @@ class PersistentStore {
         const raw = String(process.env.DATABASE_STATE_TABLE ?? "manager_state_snapshots").trim();
         return raw.replace(/[^a-zA-Z0-9_]/g, "") || "manager_state_snapshots";
     }
+    resolveSchemaName() {
+        const raw = String(process.env.DATABASE_SCHEMA ?? "manager_core").trim();
+        return raw.replace(/[^a-zA-Z0-9_]/g, "") || "manager_core";
+    }
     async ensureStorage() {
+        await this.pool.query(`create schema if not exists ${this.schemaName}`);
         await this.pool.query(`
-      create table if not exists ${this.tableName} (
+      create table if not exists ${this.tableRef} (
         snapshot_key text primary key,
         state jsonb not null,
         updated_at timestamptz not null default now()
@@ -97,7 +116,7 @@ class PersistentStore {
     `);
     }
     async loadSnapshot() {
-        const result = await this.pool.query(`select state from ${this.tableName} where snapshot_key = $1 limit 1`, [SNAPSHOT_KEY]);
+        const result = await this.pool.query(`select state from ${this.tableRef} where snapshot_key = $1 limit 1`, [SNAPSHOT_KEY]);
         if (result.rows[0]?.state && typeof result.rows[0].state === "object") {
             return result.rows[0].state;
         }
@@ -127,11 +146,34 @@ class PersistentStore {
         };
     }
     mergeStaticById(seedItems, existingItems) {
-        const existingById = new Map(this.arrayOrEmpty(existingItems).map((item) => [item.id, item]));
-        return seedItems.map((item) => {
+        const existingList = this.arrayOrEmpty(existingItems);
+        const existingById = new Map(existingList.map((item) => [item.id, item]));
+        const merged = [];
+        const seenIds = new Set();
+        for (const item of seedItems) {
             const current = existingById.get(item.id);
-            return current ? { ...current, ...item } : { ...item };
-        });
+            seenIds.add(item.id);
+            if (!current) {
+                merged.push({ ...item });
+                continue;
+            }
+            const nextItem = { ...item, ...current };
+            if ((item?.panelConfig && typeof item.panelConfig === "object") ||
+                (current?.panelConfig && typeof current.panelConfig === "object")) {
+                nextItem.panelConfig = {
+                    ...(item?.panelConfig && typeof item.panelConfig === "object" ? item.panelConfig : {}),
+                    ...(current?.panelConfig && typeof current.panelConfig === "object" ? current.panelConfig : {}),
+                };
+            }
+            merged.push(nextItem);
+        }
+        for (const item of existingList) {
+            if (seenIds.has(item.id)) {
+                continue;
+            }
+            merged.push({ ...item });
+        }
+        return merged;
     }
     mergeDiscordApps(existingItems, configuredPoolApps) {
         const result = [];
@@ -243,7 +285,7 @@ class PersistentStore {
             return false;
         }
         await this.pool.query(`
-      insert into ${this.tableName} (snapshot_key, state, updated_at)
+      insert into ${this.tableRef} (snapshot_key, state, updated_at)
       values ($1, $2::jsonb, now())
       on conflict (snapshot_key)
       do update set state = excluded.state, updated_at = excluded.updated_at
