@@ -34,28 +34,214 @@ const STATUS_EMOJIS = {
 const CUSTOM_IDS = {
     salesBuy: "mgr:sales:buy",
     buyPlanSelect: "mgr:buy:plan",
+    buyPlanSelectCartPrefix: "mgr:buy:plan:cart:",
+    cartContinuePrefix: "mgr:cart:continue:",
+    cartCancelPrefix: "mgr:cart:cancel:",
+    cartBackPrefix: "mgr:cart:back:",
+    cartAddonBioPrefix: "mgr:cart:addon:bio:",
+    cartAddonInfoPrefix: "mgr:cart:addon:info:",
+    cartPaymentPrefix: "mgr:cart:payment:",
+    pixCopyPrefix: "mgr:pix:copy:",
+    pixCancelPrefix: "mgr:pix:cancel:",
     renewSelect: "mgr:renew:select",
     appsSetupSelect: "mgr:apps:setup",
+    appsSelectPrefix: "mgr:apps:select:",
+    appsPagePrefix: "mgr:apps:page:",
+    appsViewPrefix: "mgr:apps:view:",
+    appsPowerPrefix: "mgr:apps:power:",
+    appsSetupButtonPrefix: "mgr:apps:setupbtn:",
+    appsRenamePrefix: "mgr:apps:rename:",
+    appsTokenPrefix: "mgr:apps:token:",
+    appsOwnerPrefix: "mgr:apps:owner:",
+    appsTransferPrefix: "mgr:apps:transfer:",
+    appsDeletePrefix: "mgr:apps:delete:",
     adminRefresh: "mgr:admin:refresh",
+    adminProducts: "mgr:admin:products",
+    adminProductsCreate: "mgr:admin:products:create",
+    adminProductsSelect: "mgr:admin:products:select",
     adminSubscribers: "mgr:admin:subs",
     adminPermissions: "mgr:admin:perms",
     adminEfipayModal: "mgr:admin:efi:modal",
+    adminEfipayCredentials: "mgr:admin:efi:credentials",
     adminEfipayUpload: "mgr:admin:efi:upload",
     adminEfipayValidate: "mgr:admin:efi:validate",
     adminEfipayWebhook: "mgr:admin:efi:webhook",
+    adminSales: "mgr:admin:sales",
+    adminSalesCartCategory: "mgr:admin:sales:cart-category",
+    adminSalesCartCategoryClear: "mgr:admin:sales:cart-category:clear",
+    adminSalesCustomerRole: "mgr:admin:sales:customer-role",
+    adminSalesCustomerRoleClear: "mgr:admin:sales:customer-role:clear",
+    adminSalesStaffRoles: "mgr:admin:sales:staff-roles",
+    adminSalesStaffRolesClear: "mgr:admin:sales:staff-roles:clear",
+    adminSalesTemplate: "mgr:admin:sales:template",
+    adminSalesLogsChannel: "mgr:admin:sales:logs-channel",
+    adminSalesLogsChannelClear: "mgr:admin:sales:logs-channel:clear",
+    adminSalesInactivity: "mgr:admin:sales:inactivity",
+    adminSalesCategorySelect: "mgr:admin:sales:category-select",
+    adminSalesCustomerRoleSelect: "mgr:admin:sales:customer-role-select",
+    adminSalesStaffRolesSelect: "mgr:admin:sales:staff-roles-select",
+    adminSalesLogsChannelSelect: "mgr:admin:sales:logs-channel-select",
+    adminBackHome: "mgr:admin:back:home",
+    adminBackProducts: "mgr:admin:back:products",
+    adminBackEfipay: "mgr:admin:back:efipay",
+    adminBackSales: "mgr:admin:back:sales",
+    adminProductViewPrefix: "mgr:admin:product:view:",
+    adminProductBasicPrefix: "mgr:admin:product:basic:",
+    adminProductVisualPrefix: "mgr:admin:product:visual:",
+    adminProductApprovedPrefix: "mgr:admin:product:approved:",
+    adminProductSourcePrefix: "mgr:admin:product:source:",
+    adminProductPlansPrefix: "mgr:admin:product:plans:",
+    adminProductRolePrefix: "mgr:admin:product:role:",
+    adminProductRoleClearPrefix: "mgr:admin:product:role-clear:",
+    adminProductPreviewPrefix: "mgr:admin:product:preview:",
+    adminProductPublishPrefix: "mgr:admin:product:publish:",
+    adminProductPublishChannelPrefix: "mgr:admin:product:publish-channel:",
+    adminProductRoleSelectPrefix: "mgr:admin:product:role-select:",
 };
+const PURCHASE_CONFIG_CHANNEL_ID = "1491695938622853251";
 const MODAL_IDS = {
     efipayConfig: "mgr:modal:efi",
+    efipayUpload: "mgr:modal:efi-upload",
+    salesTemplate: "mgr:modal:sales-template",
+    salesInactivity: "mgr:modal:sales-inactivity",
+    productCreate: "mgr:modal:product:create",
+    productBasicPrefix: "mgr:modal:product:basic:",
+    productVisualPrefix: "mgr:modal:product:visual:",
+    productApprovedPrefix: "mgr:modal:product:approved:",
+    productSourcePrefix: "mgr:modal:product:source:",
+    productPlansPrefix: "mgr:modal:product:plans:",
     botSetupPrefix: "mgr:modal:setup:",
+    appRenamePrefix: "mgr:modal:apps:rename:",
+    appTokenPrefix: "mgr:modal:apps:token:",
+    appOwnerPrefix: "mgr:modal:apps:owner:",
+    appTransferPrefix: "mgr:modal:apps:transfer:",
+    appDeletePrefix: "mgr:modal:apps:delete:",
 };
-const PENDING_UPLOAD_TTL_MS = 3 * 60 * 1000;
+const PENDING_UPLOAD_TTL_MS = 10 * 60 * 1000;
+const ADMIN_PANEL_TRACK_TTL_MS = 15 * 60 * 1000;
+const APPS_PANEL_TRACK_TTL_MS = 15 * 60 * 1000;
+const MAX_P12_BYTES = 10 * 1024 * 1024;
+function normalizeTextForMatch(value) {
+    return String(value ?? "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .trim()
+        .toLowerCase();
+}
+function clampText(value, maxLength, fallback = "") {
+    const normalized = String(value ?? fallback ?? "");
+    return normalized.length <= maxLength ? normalized : normalized.slice(0, maxLength);
+}
+function isLikelyHttpUrl(value) {
+    const normalized = String(value ?? "").trim();
+    return /^https?:\/\//iu.test(normalized);
+}
+function buildImageAttachmentFromDataUri(value, baseFileName = "pix-qrcode") {
+    const normalized = String(value ?? "").trim();
+    const match = normalized.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,([\s\S]+)$/iu);
+    if (!match) {
+        return null;
+    }
+    try {
+        const mimeType = String(match[1] ?? "image/png").toLowerCase();
+        const base64Payload = String(match[2] ?? "").trim();
+        if (!base64Payload) {
+            return null;
+        }
+        const extension = mimeType.split("/")[1]?.replace(/[^a-z0-9]/giu, "") || "png";
+        const fileName = `${baseFileName}.${extension}`;
+        const buffer = Buffer.from(base64Payload, "base64");
+        if (!buffer.length) {
+            return null;
+        }
+        return new discord_js_1.AttachmentBuilder(buffer, { name: fileName });
+    }
+    catch {
+        return null;
+    }
+}
+function normalizeHexColor(value) {
+    const normalized = String(value ?? "")
+        .trim()
+        .replace(/^#/u, "")
+        .replace(/^0x/iu, "");
+    if (!normalized) {
+        return null;
+    }
+    if (!/^(?:[\da-fA-F]{3}|[\da-fA-F]{6})$/u.test(normalized)) {
+        return null;
+    }
+    const expanded = normalized.length === 3
+        ? normalized
+            .split("")
+            .map((character) => `${character}${character}`)
+            .join("")
+        : normalized;
+    return `#${expanded.toUpperCase()}`;
+}
+function parseDelimitedTopicValue(topic, key) {
+    const normalized = String(topic ?? "");
+    const matcher = new RegExp(`${key}:([^|]+)`, "iu");
+    const match = normalized.match(matcher);
+    return String(match?.[1] ?? "").trim() || null;
+}
+function upsertDelimitedTopicValue(topic, key, value) {
+    const normalizedKey = String(key ?? "").trim();
+    if (!normalizedKey) {
+        return String(topic ?? "").trim();
+    }
+    const normalizedValue = value === undefined || value === null ? "" : String(value).trim();
+    const parts = String(topic ?? "")
+        .split("|")
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .filter((part) => !new RegExp(`^${normalizedKey}:`, "iu").test(part));
+    if (normalizedValue) {
+        parts.push(`${normalizedKey}:${normalizedValue}`);
+    }
+    return parts.join(" | ").slice(0, 1024);
+}
+function inferEfiSandboxFromCertName(fileName, fallbackValue = false) {
+    const normalized = normalizeTextForMatch(fileName);
+    if (!normalized) {
+        return fallbackValue;
+    }
+    if (normalized.includes("producao") || normalized.includes("production")) {
+        return false;
+    }
+    if (normalized.includes("homologacao") ||
+        normalized.includes("sandbox") ||
+        normalized.includes("teste") ||
+        normalized.includes("hml")) {
+        return true;
+    }
+    return fallbackValue;
+}
+function isValidP12Attachment(attachment) {
+    if (!attachment) {
+        return false;
+    }
+    const name = String(attachment.name ?? "").trim().toLowerCase();
+    const contentType = String(attachment.contentType ?? "").trim().toLowerCase();
+    if (name.endsWith(".p12")) {
+        return true;
+    }
+    return contentType.includes("pkcs12") || contentType.includes("x-pkcs12");
+}
 class ManagerBotService {
     dependencies;
     config;
     client = null;
     logger = FALLBACK_LOGGER;
     pendingUploads = new Map();
+    trackedAdminPanels = new Map();
+    trackedAppsPanels = new Map();
+    cartStateCache = new Map();
+    cartTopicSyncTimers = new Map();
+    cartInactivityTimers = new Map();
+    cartApprovedTimers = new Map();
     applicationOwnerUserIds = [];
+    customerRoleSyncTimer = null;
     constructor(dependencies, config) {
         this.dependencies = dependencies;
         this.config = config;
@@ -73,7 +259,7 @@ class ManagerBotService {
             return;
         }
         const client = new discord_js_1.Client({
-            intents: [discord_js_1.GatewayIntentBits.Guilds, discord_js_1.GatewayIntentBits.DirectMessages],
+            intents: [discord_js_1.GatewayIntentBits.Guilds, discord_js_1.GatewayIntentBits.GuildMembers, discord_js_1.GatewayIntentBits.DirectMessages],
             partials: [discord_js_1.Partials.Channel],
         });
         client.once(discord_js_1.Events.ClientReady, async (readyClient) => {
@@ -85,27 +271,32 @@ class ManagerBotService {
                 return;
             }
             try {
-                const application = await readyClient.application.fetch();
-                this.applicationOwnerUserIds = this.extractApplicationOwnerUserIds(application);
-                const rest = new discord_js_1.REST({ version: "10" }).setToken(this.config.token);
-                const commandPayload = this.buildCommands().map((command) => command.toJSON());
-                if (this.config.guildId) {
-                    await rest.put(discord_js_1.Routes.applicationGuildCommands(application.id, this.config.guildId), { body: commandPayload });
-                }
-                else {
-                    await rest.put(discord_js_1.Routes.applicationCommands(application.id), {
-                        body: commandPayload,
-                    });
-                }
-                this.logger.info({
-                    scope: this.config.guildId ? "guild" : "global",
-                    commands: commandPayload.map((command) => command.name),
-                    applicationOwnerUserIds: this.applicationOwnerUserIds,
-                }, "Slash commands do manager bot registrados.");
+                await this.registerSlashCommands(readyClient, this.config.guildId ?? null);
+                await this.syncAllConfiguredCustomerRoles().catch((error) => {
+                    this.logger.warn({ error: error?.message ?? String(error) }, "Falha ao sincronizar cargos de clientes na inicializacao.");
+                });
+                await this.rehydrateExistingCartTimers().catch((error) => {
+                    this.logger.warn({ error: error?.message ?? String(error) }, "Falha ao reidratar timers de carrinho na inicializacao.");
+                });
+                this.startCustomerRoleSyncTimer();
             }
             catch (error) {
                 this.logger.error({ error: error instanceof Error ? error.message : String(error) }, "Falha ao registrar slash commands do manager bot.");
             }
+        });
+        client.on(discord_js_1.Events.GuildCreate, (guild) => {
+            if (!this.config.registerCommands) {
+                return;
+            }
+            if (this.config.guildId && guild.id !== this.config.guildId) {
+                return;
+            }
+            void this.registerSlashCommands(client, guild.id).catch((error) => {
+                this.logger.warn({
+                    error: error instanceof Error ? error.message : String(error),
+                    guildId: guild.id,
+                }, "Falha ao registrar slash commands apos entrada em um servidor.");
+            });
         });
         client.on(discord_js_1.Events.InteractionCreate, (interaction) => {
             void this.handleInteraction(interaction);
@@ -119,10 +310,67 @@ class ManagerBotService {
         this.client = client;
         await client.login(this.config.token);
     }
+    async registerSlashCommands(client, preferredGuildId = null) {
+        const application = await client.application.fetch();
+        this.applicationOwnerUserIds = this.extractApplicationOwnerUserIds(application);
+        const rest = new discord_js_1.REST({ version: "10" }).setToken(this.config.token);
+        const commandPayload = this.buildCommands().map((command) => command.toJSON());
+        let registeredScope = "global";
+        if (preferredGuildId) {
+            try {
+                await rest.put(discord_js_1.Routes.applicationGuildCommands(application.id, preferredGuildId), { body: commandPayload });
+                await rest.put(discord_js_1.Routes.applicationCommands(application.id), { body: [] }).catch((error) => {
+                    this.logger.warn({
+                        error: error instanceof Error ? error.message : String(error),
+                    }, "Falha ao remover slash commands globais antigos do manager bot.");
+                });
+                registeredScope = "guild";
+            }
+            catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                const normalized = message.toLowerCase();
+                const shouldFallbackToGlobal = normalized.includes("missing access") || normalized.includes("unknown guild") || normalized.includes("missing permissions");
+                if (!shouldFallbackToGlobal) {
+                    throw error;
+                }
+                this.logger.warn({
+                    error: message,
+                    guildId: preferredGuildId,
+                }, "Falha ao registrar slash commands no servidor configurado. Tentando registro global.");
+                await rest.put(discord_js_1.Routes.applicationCommands(application.id), {
+                    body: commandPayload,
+                });
+            }
+        }
+        else {
+            await rest.put(discord_js_1.Routes.applicationCommands(application.id), {
+                body: commandPayload,
+            });
+        }
+        this.logger.info({
+            scope: registeredScope,
+            commands: commandPayload.map((command) => command.name),
+            applicationOwnerUserIds: this.applicationOwnerUserIds,
+        }, "Slash commands do manager bot registrados.");
+    }
     async stop() {
         if (!this.client) {
             return;
         }
+        this.stopCustomerRoleSyncTimer();
+        for (const timer of this.cartTopicSyncTimers.values()) {
+            clearTimeout(timer);
+        }
+        this.cartTopicSyncTimers.clear();
+        for (const timer of this.cartInactivityTimers.values()) {
+            clearTimeout(timer);
+        }
+        this.cartInactivityTimers.clear();
+        for (const timer of this.cartApprovedTimers.values()) {
+            clearTimeout(timer);
+        }
+        this.cartApprovedTimers.clear();
+        this.cartStateCache.clear();
         await this.client.destroy();
         this.client = null;
     }
@@ -140,87 +388,35 @@ class ManagerBotService {
                 .setMinValue(1)
                 .setMaxValue(12)),
             new discord_js_1.SlashCommandBuilder()
-                .setName("setpainel")
-                .setDescription("Publica o painel de vendas do produto escolhido.")
+                .setName("painel-manager")
+                .setDescription("Abre o painel administrativo privado do bot manager."),
+            new discord_js_1.SlashCommandBuilder()
+                .setName("config")
+                .setDescription("Abre atalhos de configuracao do manager.")
+                .addSubcommand((subcommand) => subcommand
+                .setName("produto")
+                .setDescription("Abre a configuracao visual de um produto/painel.")
                 .addStringOption((option) => option
-                .setName("produto_slug")
-                .setDescription("Slug do produto que sera publicado")
-                .setRequired(true))
+                 .setName("produto")
+                 .setDescription("Nome ou slug do produto")
+                 .setRequired(false)
+                 .setAutocomplete(true))),
+            new discord_js_1.SlashCommandBuilder()
+                .setName("set")
+                .setDescription("Publica atalhos rapidos do manager.")
+                .addSubcommand((subcommand) => subcommand
+                .setName("produto")
+                .setDescription("Publica no canal o painel de um produto ja cadastrado.")
+                .addStringOption((option) => option
+                .setName("produto")
+                .setDescription("Nome ou slug do produto")
+                .setRequired(true)
+                .setAutocomplete(true))
                 .addChannelOption((option) => option
                 .setName("canal")
                 .setDescription("Canal onde o painel sera publicado")
-                .setRequired(false)),
-            new discord_js_1.SlashCommandBuilder()
-                .setName("criarpainel")
-                .setDescription("Cria um novo produto/painel no manager.")
-                .addStringOption((option) => option
-                .setName("slug")
-                .setDescription("Slug unico do produto")
-                .setRequired(true))
-                .addStringOption((option) => option
-                .setName("nome")
-                .setDescription("Nome publico do produto")
-                .setRequired(true))
-                .addStringOption((option) => option
-                .setName("descricao")
-                .setDescription("Descricao publica do produto")
-                .setRequired(false)),
-            new discord_js_1.SlashCommandBuilder()
-                .setName("configpainel")
-                .setDescription("Configura source, nome, planos e detalhes do produto.")
-                .addStringOption((option) => option
-                .setName("produto_slug")
-                .setDescription("Slug do produto")
-                .setRequired(true))
-                .addStringOption((option) => option
-                .setName("nome")
-                .setDescription("Novo nome do produto")
-                .setRequired(false))
-                .addStringOption((option) => option
-                .setName("descricao")
-                .setDescription("Nova descricao do produto")
-                .setRequired(false))
-                .addStringOption((option) => option
-                .setName("source_slug")
-                .setDescription("Slug interno da source")
-                .setRequired(false))
-                .addStringOption((option) => option
-                .setName("source_tipo")
-                .setDescription("Como a source sera localizada pelo manager")
                 .setRequired(false)
-                .addChoices({ name: "artifact_path", value: "artifact_path" }, { name: "github_repo", value: "github_repo" }, { name: "project_dir", value: "project_dir" }))
-                .addStringOption((option) => option
-                .setName("source_valor")
-                .setDescription("Caminho do zip, repo GitHub (owner/repo) ou pasta local")
-                .setRequired(false))
-                .addStringOption((option) => option
-                .setName("source_ref")
-                .setDescription("Branch/ref do GitHub")
-                .setRequired(false))
-                .addStringOption((option) => option
-                .setName("source_path")
-                .setDescription("Subpasta da source dentro do repo GitHub")
-                .setRequired(false))
-                .addStringOption((option) => option
-                .setName("source_token")
-                .setDescription("Token de leitura para repo privado no GitHub")
-                .setRequired(false))
-                .addStringOption((option) => option
-                .setName("source_excluir")
-                .setDescription("Pastas/arquivos para excluir do zip, separados por virgula")
-                .setRequired(false))
-                .addStringOption((option) => option
-                .setName("tutorial_url")
-                .setDescription("Link tutorial de setup")
-                .setRequired(false))
-                .addIntegerOption((option) => option.setName("semanal").setDescription("Preco semanal em centavos").setRequired(false).setMinValue(1))
-                .addIntegerOption((option) => option.setName("mensal").setDescription("Preco mensal em centavos").setRequired(false).setMinValue(1))
-                .addIntegerOption((option) => option.setName("trimestral").setDescription("Preco trimestral em centavos").setRequired(false).setMinValue(1))
-                .addIntegerOption((option) => option.setName("semestral").setDescription("Preco semestral em centavos").setRequired(false).setMinValue(1))
-                .addIntegerOption((option) => option.setName("anual").setDescription("Preco anual em centavos").setRequired(false).setMinValue(1)),
-            new discord_js_1.SlashCommandBuilder()
-                .setName("painel-manager")
-                .setDescription("Abre o painel administrativo privado do bot manager."),
+                .addChannelTypes(discord_js_1.ChannelType.GuildText, discord_js_1.ChannelType.GuildAnnouncement))),
             new discord_js_1.SlashCommandBuilder()
                 .setName("ver-assinantes")
                 .setDescription("Lista assinantes, status e principais pendencias.")
@@ -271,6 +467,10 @@ class ManagerBotService {
     }
     async handleInteraction(interaction) {
         try {
+            if (typeof interaction.isAutocomplete === "function" && interaction.isAutocomplete()) {
+                await this.handleAutocompleteInteraction(interaction);
+                return;
+            }
             if (interaction.isChatInputCommand()) {
                 await this.handleChatInputCommand(interaction);
                 return;
@@ -283,12 +483,26 @@ class ManagerBotService {
                 await this.handleSelectMenuInteraction(interaction);
                 return;
             }
+            if (typeof interaction.isChannelSelectMenu === "function" && interaction.isChannelSelectMenu()) {
+                await this.handleSelectMenuInteraction(interaction);
+                return;
+            }
+            if (typeof interaction.isRoleSelectMenu === "function" && interaction.isRoleSelectMenu()) {
+                await this.handleSelectMenuInteraction(interaction);
+                return;
+            }
             if (interaction.isModalSubmit()) {
                 await this.handleModalSubmit(interaction);
             }
         }
         catch (error) {
-            this.logger.error({ error: error instanceof Error ? error.message : String(error) }, "Falha ao responder interacao do manager bot.");
+            this.logger.error({
+                error: error instanceof Error ? error.message : String(error),
+                stack: error instanceof Error ? error.stack : undefined,
+                interactionType: interaction?.type,
+                commandName: interaction?.isChatInputCommand?.() ? interaction.commandName : undefined,
+                customId: "customId" in interaction ? interaction.customId : undefined,
+            }, "Falha ao responder interacao do manager bot.");
             const content = "Nao consegui concluir essa acao agora. Confira a configuracao do manager e tente novamente.";
             await this.safeReply(interaction, content);
         }
@@ -298,45 +512,98 @@ class ManagerBotService {
             return;
         }
         this.cleanupPendingUploads();
+        this.cleanupTrackedAdminPanels();
+        this.cleanupTrackedAppsPanels();
         const pending = this.pendingUploads.get(message.author.id);
         if (!pending || pending.type !== "efipay_cert") {
             return;
         }
-        if (message.inGuild()) {
-            await message.reply("Por seguranca, envie o arquivo `.p12` por DM para este bot.");
+        const isSameScope = String(pending.guildId ?? "") === String(message.guildId ?? "") &&
+            String(pending.channelId ?? "") === String(message.channelId ?? "");
+        if (!isSameScope) {
             return;
         }
-        if (message.attachments.size === 0) {
-            if (!message.inGuild()) {
-                await message.reply("Envie o arquivo `.p12` da Efi aqui na DM para eu salvar no manager.");
+        if ((pending.expiresAt ?? 0) <= Date.now()) {
+            this.pendingUploads.delete(message.author.id);
+            const updated = await this.tryUpdateTrackedAdminPanel(message.author.id, this.buildAdminPanelPayload("Tempo para upload expirado. Clique em `Enviar .p12` novamente."));
+            if (!updated) {
+                await message.reply("Tempo para upload expirado. Clique em `Enviar .p12` novamente.").catch(() => null);
             }
             return;
         }
-        const attachment = [...message.attachments.values()].find((item) => String(item.name ?? "").toLowerCase().endsWith(".p12"));
-        if (!attachment) {
-            await message.reply("Recebi sua mensagem, mas preciso especificamente de um arquivo `.p12` da Efi.");
+        if (normalizeTextForMatch(message.content) === "cancelar") {
+            this.pendingUploads.delete(message.author.id);
+            const updated = await this.tryUpdateTrackedAdminPanel(message.author.id, this.buildAdminPanelPayload("Importacao do certificado `.p12` cancelada."));
+            if (!updated) {
+                await message.reply("Importacao do certificado cancelada.").catch(() => null);
+            }
             return;
         }
-        const payload = await this.downloadAttachmentBase64(attachment.url);
-        this.dependencies.managerRuntimeConfigService.updateRuntimeConfig({
-            certP12Base64: payload.base64,
-            certFileName: attachment.name ?? "efipay-cert.p12",
-        });
-        this.pendingUploads.delete(message.author.id);
-        const validation = await this.tryAutoValidateEfipay();
-        await this.persistStoreIfNeeded();
-        const snapshot = this.dependencies.managerRuntimeConfigService.getAdminSnapshot();
-        const suffix = validation.ok
-            ? "Credenciais validadas e webhook sincronizado automaticamente."
-            : validation.skipped
-                ? validation.message
-                : `Certificado salvo, mas a validacao automatica falhou: ${validation.message}`;
-        await message.reply([
-            "Certificado `.p12` salvo no bot manager.",
-            `Pix key configurada: ${snapshot.billing.efipay.configuredFields.pixKey ? "sim" : "nao"}.`,
-            `URL publica: ${snapshot.appBaseUrl ?? "nao definida"}.`,
-            suffix,
-        ].join("\n"));
+        const attachments = [...message.attachments.values()];
+        if (!attachments.length) {
+            const updated = await this.tryUpdateTrackedAdminPanel(message.author.id, this.buildAdminPanelPayload("Envie um arquivo `.p12` como anexo no canal atual ou envie `cancelar` para abortar."));
+            if (!updated) {
+                await message.reply("Envie um arquivo `.p12` como anexo no canal atual.").catch(() => null);
+            }
+            return;
+        }
+        const attachment = attachments.find((item) => isValidP12Attachment(item));
+        if (!attachment) {
+            const updated = await this.tryUpdateTrackedAdminPanel(message.author.id, this.buildAdminPanelPayload("Arquivo invalido. Envie um certificado com extensao `.p12`."));
+            if (!updated) {
+                await message.reply("Arquivo invalido. Envie um certificado com extensao `.p12`.").catch(() => null);
+            }
+            return;
+        }
+        if (Number(attachment.size ?? 0) > MAX_P12_BYTES) {
+            const updated = await this.tryUpdateTrackedAdminPanel(message.author.id, this.buildAdminPanelPayload("O arquivo `.p12` deve ter no maximo 10MB."));
+            if (!updated) {
+                await message.reply("O arquivo `.p12` deve ter no maximo 10MB.").catch(() => null);
+            }
+            return;
+        }
+        try {
+            const payload = await this.downloadAttachmentBase64(attachment.url);
+            if (!payload.base64 || payload.size <= 0) {
+                throw new Error("Arquivo recebido esta vazio.");
+            }
+            if (payload.size > MAX_P12_BYTES) {
+                throw new Error("O arquivo `.p12` deve ter no maximo 10MB.");
+            }
+            const currentEfipay = this.dependencies.managerRuntimeConfigService.getResolvedEfipayOptions();
+            const inferredSandbox = inferEfiSandboxFromCertName(`${attachment.name ?? ""}`, Boolean(currentEfipay.sandbox));
+            this.dependencies.managerRuntimeConfigService.updateRuntimeConfig({
+                certP12Base64: payload.base64,
+                certFileName: attachment.name ?? "efipay-cert.p12",
+                sandbox: inferredSandbox,
+            });
+            this.pendingUploads.delete(message.author.id);
+            const validation = await this.tryAutoValidateEfipay();
+            await this.persistStoreIfNeeded();
+            const statusMessage = validation.ok
+                ? `Certificado \`.p12\` salvo com sucesso. Ambiente detectado: **${inferredSandbox ? "SANDBOX" : "PRODUCAO"}**. Webhook sincronizado automaticamente.`
+                : validation.skipped
+                    ? `Certificado \`.p12\` salvo com sucesso. Ambiente detectado: **${inferredSandbox ? "SANDBOX" : "PRODUCAO"}**. ${validation.message}`
+                    : `Certificado \`.p12\` salvo, mas a validacao automatica falhou: ${validation.message}`;
+            const updated = await this.tryUpdateTrackedAdminPanel(message.author.id, this.buildAdminPanelPayload(statusMessage));
+            if (!updated) {
+                await message.reply({
+                    embeds: [this.buildAdminPanelEmbed(statusMessage)],
+                    components: this.buildAdminPanelComponents(),
+                }).catch(() => null);
+            }
+            await message.react(validation.ok ? "✅" : "⚠️").catch(() => null);
+        }
+        catch (error) {
+            this.pendingUploads.delete(message.author.id);
+            await this.persistStoreIfNeeded();
+            const reason = error instanceof Error ? error.message : String(error);
+            const updated = await this.tryUpdateTrackedAdminPanel(message.author.id, this.buildAdminPanelPayload(`Falha ao importar o certificado \`.p12\`: ${reason}`));
+            if (!updated) {
+                await message.reply(`Falha ao importar o certificado \`.p12\`: ${reason}`).catch(() => null);
+            }
+            await message.react("❌").catch(() => null);
+        }
     }
     async handleChatInputCommand(interaction) {
         switch (interaction.commandName) {
@@ -357,6 +624,12 @@ class ManagerBotService {
                 return;
             case "painel-manager":
                 await this.handleManagerPanelCommand(interaction);
+                return;
+            case "config":
+                await this.handleConfigCommand(interaction);
+                return;
+            case "set":
+                await this.handleSetCommand(interaction);
                 return;
             case "ver-assinantes":
                 await this.handleViewSubscribersCommand(interaction);
@@ -379,67 +652,364 @@ class ManagerBotService {
             await this.handleSalesBuyButton(interaction);
             return;
         }
+        if (interaction.customId.startsWith(CUSTOM_IDS.cartContinuePrefix)) {
+            const payload = String(interaction.customId.slice(CUSTOM_IDS.cartContinuePrefix.length) ?? "").trim();
+            const separatorIndex = payload.indexOf(":");
+            const ownerUserId = separatorIndex >= 0 ? payload.slice(0, separatorIndex) : "";
+            const productSlug = separatorIndex >= 0 ? payload.slice(separatorIndex + 1) : "";
+            if (interaction.user.id !== ownerUserId && !this.hasAdminAccess(interaction)) {
+                await this.replyEphemeral(interaction, "Somente o dono desse carrinho pode continuar a compra.");
+                return;
+            }
+            const product = this.getResolvedProductBySlug(productSlug) ?? this.getPrimaryProduct();
+            if (!product) {
+                await this.replyEphemeral(interaction, "Produto nao encontrado para esse carrinho.");
+                return;
+            }
+            await interaction.deferUpdate().catch(() => null);
+            const ownerUser = interaction.user.id === ownerUserId
+                ? interaction.user
+                : (await interaction.guild?.members.fetch(ownerUserId).catch(() => null))?.user ?? { id: ownerUserId, username: ownerUserId };
+            const state = await this.persistCartState(interaction.channel, ownerUser, product, {
+                ...this.getCartStateFromChannel(interaction.channel, product, interaction.message),
+                step: "addons",
+            });
+            await this.updateCartInteractionMessage(interaction, this.buildCartPanelPayload(product, ownerUser, state));
+            return;
+        }
+        if (interaction.customId.startsWith(CUSTOM_IDS.cartBackPrefix)) {
+            const payload = String(interaction.customId.slice(CUSTOM_IDS.cartBackPrefix.length) ?? "").trim();
+            const separatorIndex = payload.indexOf(":");
+            const ownerUserId = separatorIndex >= 0 ? payload.slice(0, separatorIndex) : "";
+            const productSlug = separatorIndex >= 0 ? payload.slice(separatorIndex + 1) : "";
+            if (interaction.user.id !== ownerUserId && !this.hasAdminAccess(interaction)) {
+                await this.replyEphemeral(interaction, "Somente o dono desse carrinho pode alterar essa compra.");
+                return;
+            }
+            const product = this.getResolvedProductBySlug(productSlug) ?? this.getPrimaryProduct();
+            if (!product) {
+                await this.replyEphemeral(interaction, "Produto nao encontrado para esse carrinho.");
+                return;
+            }
+            await interaction.deferUpdate().catch(() => null);
+            const ownerUser = interaction.user.id === ownerUserId
+                ? interaction.user
+                : (await interaction.guild?.members.fetch(ownerUserId).catch(() => null))?.user ?? { id: ownerUserId, username: ownerUserId };
+            const state = await this.persistCartState(interaction.channel, ownerUser, product, {
+                ...this.getCartStateFromChannel(interaction.channel, product, interaction.message),
+                step: "plan",
+            });
+            await this.updateCartInteractionMessage(interaction, this.buildCartPanelPayload(product, ownerUser, state));
+            return;
+        }
+        if (interaction.customId.startsWith(CUSTOM_IDS.cartAddonBioPrefix)) {
+            const payload = String(interaction.customId.slice(CUSTOM_IDS.cartAddonBioPrefix.length) ?? "").trim();
+            const separatorIndex = payload.indexOf(":");
+            const ownerUserId = separatorIndex >= 0 ? payload.slice(0, separatorIndex) : "";
+            const productSlug = separatorIndex >= 0 ? payload.slice(separatorIndex + 1) : "";
+            if (interaction.user.id !== ownerUserId && !this.hasAdminAccess(interaction)) {
+                await this.replyEphemeral(interaction, "Somente o dono desse carrinho pode alterar essa compra.");
+                return;
+            }
+            const product = this.getResolvedProductBySlug(productSlug) ?? this.getPrimaryProduct();
+            if (!product) {
+                await this.replyEphemeral(interaction, "Produto nao encontrado para esse carrinho.");
+                return;
+            }
+            await interaction.deferUpdate().catch(() => null);
+            const ownerUser = interaction.user.id === ownerUserId
+                ? interaction.user
+                : (await interaction.guild?.members.fetch(ownerUserId).catch(() => null))?.user ?? { id: ownerUserId, username: ownerUserId };
+            const state = this.getCartStateFromChannel(interaction.channel, product, interaction.message);
+            const addonCodes = new Set(state.addonCodes);
+            if (addonCodes.has("custom-bio")) {
+                addonCodes.delete("custom-bio");
+            }
+            else {
+                addonCodes.add("custom-bio");
+            }
+            const nextState = await this.persistCartState(interaction.channel, ownerUser, product, {
+                ...state,
+                step: "addons",
+                addonCodes: [...addonCodes],
+            });
+            await this.updateCartInteractionMessage(interaction, this.buildCartPanelPayload(product, ownerUser, nextState));
+            return;
+        }
+        if (interaction.customId.startsWith(CUSTOM_IDS.cartAddonInfoPrefix)) {
+            const payload = String(interaction.customId.slice(CUSTOM_IDS.cartAddonInfoPrefix.length) ?? "").trim();
+            const firstSeparatorIndex = payload.indexOf(":");
+            const secondSeparatorIndex = firstSeparatorIndex >= 0 ? payload.indexOf(":", firstSeparatorIndex + 1) : -1;
+            const addonCode = firstSeparatorIndex >= 0 ? payload.slice(0, firstSeparatorIndex) : "";
+            const ownerUserId = secondSeparatorIndex >= 0 ? payload.slice(firstSeparatorIndex + 1, secondSeparatorIndex) : "";
+            const productSlug = secondSeparatorIndex >= 0 ? payload.slice(secondSeparatorIndex + 1) : "";
+            if (interaction.user.id !== ownerUserId && !this.hasAdminAccess(interaction)) {
+                await this.replyEphemeral(interaction, "Somente o dono desse carrinho pode usar esse atalho.");
+                return;
+            }
+            const product = this.getResolvedProductBySlug(productSlug) ?? this.getPrimaryProduct();
+            const addonPool = product?.id ? this.dependencies.catalogService.listAddons(product.id) : (product?.addons ?? []);
+            const addon = addonPool.find((item) => item.code === addonCode);
+            if (addon && !addon.informationalOnly) {
+                await interaction.deferUpdate().catch(() => null);
+                const ownerUser = interaction.user.id === ownerUserId
+                    ? interaction.user
+                    : (await interaction.guild?.members.fetch(ownerUserId).catch(() => null))?.user ?? { id: ownerUserId, username: ownerUserId };
+                const state = this.getCartStateFromChannel(interaction.channel, product, interaction.message);
+                const addonCodes = new Set(state.addonCodes);
+                if (addonCodes.has(addon.code)) {
+                    addonCodes.delete(addon.code);
+                }
+                else {
+                    addonCodes.add(addon.code);
+                }
+                const nextState = await this.persistCartState(interaction.channel, ownerUser, product, {
+                    ...state,
+                    step: "addons",
+                    addonCodes: [...addonCodes],
+                });
+                await this.updateCartInteractionMessage(interaction, this.buildCartPanelPayload(product, ownerUser, nextState));
+                return;
+            }
+            const fallbackMessages = {
+                "auto-restart": "⚡ | O bot reinicia automaticamente em caso de erro. Nao se preocupe em pagar a mais por isso.",
+                "custom-qr": "🖼️ | O QR Code personalizado com a logo do seu servidor ja faz parte do pacote, sem custo extra.",
+                "priority-support": "🛡️ | Atualmente nao oferecemos suporte prioritario exclusivo, mas nossa equipe estara sempre disponivel para ajudar, sem cobrar a mais por isso.",
+            };
+            await this.replyEphemeral(interaction, addon?.description ?? fallbackMessages[addonCode] ?? "Esse botao e apenas informativo.");
+            return;
+        }
+        if (interaction.customId.startsWith(CUSTOM_IDS.cartCancelPrefix)) {
+            const payload = String(interaction.customId.slice(CUSTOM_IDS.cartCancelPrefix.length) ?? "").trim();
+            const separatorIndex = payload.indexOf(":");
+            const ownerUserId = separatorIndex >= 0 ? payload.slice(0, separatorIndex) : "";
+            const productSlug = separatorIndex >= 0 ? payload.slice(separatorIndex + 1) : "";
+            if (interaction.user.id !== ownerUserId && !this.hasAdminAccess(interaction)) {
+                await this.replyEphemeral(interaction, "Somente o dono desse carrinho pode cancelar a compra.");
+                return;
+            }
+            await interaction.deferUpdate().catch(() => null);
+            const product = this.getResolvedProductBySlug(productSlug) ?? this.getPrimaryProduct();
+            if (product) {
+                const state = this.getCartStateFromChannel(interaction.channel, product, interaction.message);
+                await this.logSalesEvent({
+                    type: "cart_closed_manual",
+                    userId: ownerUserId || interaction.user.id,
+                    channelId: String(interaction.channel?.id ?? "").trim() || null,
+                    productName: product.name,
+                    planName: this.getCartSelectedPlan(product, state)?.name ?? null,
+                    amountCents: this.calculateCartTotalCents(product, state),
+                    currency: this.getCartSelectedPlan(product, state)?.currency ?? "BRL",
+                    addons: this.getSelectedAddonLogEntries(product, state),
+                    note: "Carrinho cancelado manualmente pelo cliente.",
+                });
+            }
+            this.clearCartRuntimeState(interaction.channel?.id);
+            if (interaction.channel?.deletable) {
+                await interaction.channel.delete("Carrinho cancelado pelo usuario.").catch(() => null);
+                return;
+            }
+            await interaction.message?.edit({
+                content: "Carrinho cancelado.",
+                embeds: [],
+                components: [],
+            }).catch(() => null);
+            return;
+        }
+        if (interaction.customId.startsWith(CUSTOM_IDS.cartPaymentPrefix)) {
+            const payload = String(interaction.customId.slice(CUSTOM_IDS.cartPaymentPrefix.length) ?? "").trim();
+            const separatorIndex = payload.indexOf(":");
+            const ownerUserId = separatorIndex >= 0 ? payload.slice(0, separatorIndex) : "";
+            const productSlug = separatorIndex >= 0 ? payload.slice(separatorIndex + 1) : "";
+            if (interaction.user.id !== ownerUserId && !this.hasAdminAccess(interaction)) {
+                await this.replyEphemeral(interaction, "Somente o dono desse carrinho pode continuar a compra.");
+                return;
+            }
+            const product = this.getResolvedProductBySlug(productSlug) ?? this.getPrimaryProduct();
+            if (!product) {
+                await this.replyEphemeral(interaction, "Produto nao encontrado para esse carrinho.");
+                return;
+            }
+            const ownerMember = await interaction.guild?.members.fetch(ownerUserId).catch(() => null);
+            const ownerUser = ownerMember?.user ?? (interaction.user.id === ownerUserId ? interaction.user : { id: ownerUserId, username: ownerUserId });
+            const state = this.getCartStateFromChannel(interaction.channel, product, interaction.message);
+            const selectedPlan = this.getCartSelectedPlan(product, state);
+            if (!selectedPlan) {
+                await this.replyEphemeral(interaction, "Escolha um plano valido antes de gerar o pagamento.");
+                return;
+            }
+            await interaction.deferUpdate();
+            try {
+                await this.persistCartState(interaction.channel, ownerUser, product, state);
+                const checkout = await this.dependencies.billingService.createEfipayPixCheckout({
+                    productSlug: product.slug,
+                    planCode: selectedPlan.code,
+                    discordUserId: ownerUserId,
+                    discordUsername: ownerUser.username,
+                    addonCodes: state.addonCodes,
+                    cartChannelId: String(interaction.channel?.id ?? "").trim() || null,
+                    cartMessageId: String(interaction.message?.id ?? "").trim() || null,
+                });
+                await this.persistStoreIfNeeded();
+                this.clearCartRuntimeState(interaction.channel?.id);
+                await interaction.editReply({
+                    ...this.buildPixCheckoutResponse({
+                        title: "Pix da assinatura criado",
+                        intro: "Escaneie o QR Code abaixo ou use o botao de Pix copia e cola. O pagamento sera validado automaticamente aqui no carrinho.",
+                        checkout,
+                        productName: product.name,
+                        planName: selectedPlan.name,
+                        setupHint: state.addonCodes.includes("custom-bio")
+                            ? "Depois da aprovacao, va para <#1491695938622853251> e use `/apps` > configurar bot. A opcao de bio personalizada ficara liberada para voce informar o texto desejado."
+                            : "Depois da aprovacao, va para <#1491695938622853251> e use `/apps` > configurar bot para finalizar sua aplicacao.",
+                    }),
+                });
+            }
+            catch (error) {
+                await interaction.editReply({
+                    content: [
+                        "Nao consegui gerar o Pix agora.",
+                        error?.message ?? "Falha desconhecida.",
+                        "Se voce for da equipe, abra `Configurar Efi` no `/painel-manager` e valide a Efi do manager.",
+                    ].join("\n"),
+                    components: [],
+                    embeds: [],
+                });
+            }
+            return;
+        }
+        if (interaction.customId.startsWith(CUSTOM_IDS.pixCopyPrefix)) {
+            await this.handlePixCopyButton(interaction);
+            return;
+        }
+        if (interaction.customId.startsWith(CUSTOM_IDS.pixCancelPrefix)) {
+            await this.handlePixCancelButton(interaction);
+            return;
+        }
+        if (interaction.customId.startsWith(CUSTOM_IDS.appsPagePrefix)) {
+            await this.handleAppsPageButton(interaction);
+            return;
+        }
+        if (interaction.customId.startsWith(CUSTOM_IDS.appsViewPrefix)) {
+            await this.handleAppsViewButton(interaction);
+            return;
+        }
+        if (interaction.customId.startsWith(CUSTOM_IDS.appsPowerPrefix)) {
+            await this.handleAppsPowerButton(interaction);
+            return;
+        }
+        if (interaction.customId.startsWith(CUSTOM_IDS.appsSetupButtonPrefix)) {
+            await this.handleAppsSetupButton(interaction);
+            return;
+        }
+        if (interaction.customId.startsWith(CUSTOM_IDS.appsRenamePrefix)) {
+            await this.handleAppsRenameButton(interaction);
+            return;
+        }
+        if (interaction.customId.startsWith(CUSTOM_IDS.appsTokenPrefix)) {
+            await this.handleAppsTokenButton(interaction);
+            return;
+        }
+        if (interaction.customId.startsWith(CUSTOM_IDS.appsOwnerPrefix)) {
+            await this.handleAppsOwnerButton(interaction);
+            return;
+        }
+        if (interaction.customId.startsWith(CUSTOM_IDS.appsTransferPrefix)) {
+            await this.handleAppsTransferButton(interaction);
+            return;
+        }
+        if (interaction.customId.startsWith(CUSTOM_IDS.appsDeletePrefix)) {
+            await this.handleAppsDeleteButton(interaction);
+            return;
+        }
         switch (interaction.customId) {
             case CUSTOM_IDS.adminRefresh:
                 if (!this.ensureAdminAccess(interaction, "atualizar o painel administrativo")) {
                     return;
                 }
-                await interaction.update({
-                    embeds: [this.buildAdminPanelEmbed()],
-                    components: this.buildAdminPanelComponents(),
-                });
+                this.rememberAdminPanelInteraction(interaction);
+                await interaction.update(this.buildAdminPanelPayload());
+                return;
+            case CUSTOM_IDS.adminProducts:
+                if (!this.ensureAdminAccess(interaction, "abrir a central de produtos")) {
+                    return;
+                }
+                this.rememberAdminPanelInteraction(interaction);
+                await interaction.update(this.buildProductCatalogPayload());
+                return;
+            case CUSTOM_IDS.adminProductsCreate:
+                if (!this.ensureAdminAccess(interaction, "criar produto/painel")) {
+                    return;
+                }
+                this.rememberAdminPanelInteraction(interaction);
+                await interaction.showModal(this.buildCreateProductModal());
+                return;
+            case CUSTOM_IDS.adminBackHome:
+                if (!this.ensureAdminAccess(interaction, "voltar ao painel principal")) {
+                    return;
+                }
+                this.rememberAdminPanelInteraction(interaction);
+                await interaction.update(this.buildAdminPanelPayload());
+                return;
+            case CUSTOM_IDS.adminBackProducts:
+                if (!this.ensureAdminAccess(interaction, "voltar para a lista de produtos")) {
+                    return;
+                }
+                this.rememberAdminPanelInteraction(interaction);
+                await interaction.update(this.buildProductCatalogPayload());
                 return;
             case CUSTOM_IDS.adminSubscribers:
                 if (!this.ensureStaffAccess(interaction, "ver assinantes")) {
                     return;
                 }
-                await this.replyEphemeral(interaction, { embeds: [this.buildSubscribersEmbed("all")] });
+                this.rememberAdminPanelInteraction(interaction);
+                await interaction.update(this.buildAdminPanelPayload(undefined, [this.buildSubscribersEmbed("all")], this.buildAdminReturnComponents()));
                 return;
             case CUSTOM_IDS.adminPermissions:
                 if (!this.ensureAdminAccess(interaction, "ver permissoes internas")) {
                     return;
                 }
-                await this.replyEphemeral(interaction, {
-                    embeds: [this.buildPermissionsEmbed(this.dependencies.managerRuntimeConfigService.getResolvedAccessControl())],
-                });
+                this.rememberAdminPanelInteraction(interaction);
+                await interaction.update(this.buildAdminPanelPayload(undefined, [this.buildPermissionsEmbed(this.dependencies.managerRuntimeConfigService.getResolvedAccessControl())], this.buildAdminReturnComponents()));
                 return;
             case CUSTOM_IDS.adminEfipayModal:
+                if (!this.ensureAdminAccess(interaction, "abrir a central da Efi do manager")) {
+                    return;
+                }
+                this.rememberAdminPanelInteraction(interaction);
+                await interaction.update(this.buildEfipayManagementPayload());
+                return;
+            case CUSTOM_IDS.adminEfipayCredentials:
                 if (!this.ensureAdminAccess(interaction, "configurar a Efi do manager")) {
                     return;
                 }
+                this.rememberAdminPanelInteraction(interaction);
                 await interaction.showModal(this.buildEfipayConfigModal());
                 return;
             case CUSTOM_IDS.adminEfipayUpload:
                 if (!this.ensureAdminAccess(interaction, "enviar o certificado da Efi")) {
                     return;
                 }
-                this.pendingUploads.set(interaction.user.id, {
-                    type: "efipay_cert",
-                    expiresAt: Date.now() + PENDING_UPLOAD_TTL_MS,
-                });
-                await this.replyEphemeral(interaction, [
-                    "Envie o arquivo `.p12` da Efi por DM para este bot nos proximos 3 minutos.",
-                    "Assim que o arquivo chegar, eu salvo no manager e tento validar/sincronizar automaticamente.",
-                ].join("\n"));
+                this.rememberAdminPanelInteraction(interaction);
+                await interaction.showModal(this.buildEfipayUploadModal());
                 return;
             case CUSTOM_IDS.adminEfipayValidate:
                 if (!this.ensureAdminAccess(interaction, "validar a Efi do manager")) {
                     return;
                 }
-                await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
+                this.rememberAdminPanelInteraction(interaction);
+                await interaction.update(this.buildEfipayManagementPayload("Validando a Efi do manager..."));
                 try {
                     const result = await this.dependencies.managerRuntimeConfigService.validateEfipayConfiguration({ syncWebhook: true });
                     await this.persistStoreIfNeeded();
                     await interaction.editReply({
-                        embeds: [this.buildAdminPanelEmbed(`Validacao concluida. Webhook: ${result.remoteWebhook ? "sincronizado" : "sem retorno remoto"}.`)],
-                        components: this.buildAdminPanelComponents(),
+                        ...this.buildEfipayManagementPayload(`Validacao concluida. Webhook: ${result.remoteWebhook ? "sincronizado" : "sem retorno remoto"}.`),
                     });
                 }
                 catch (error) {
                     await this.persistStoreIfNeeded();
                     await interaction.editReply({
-                        embeds: [this.buildAdminPanelEmbed(`Falha na validacao da Efi: ${error.message}`)],
-                        components: this.buildAdminPanelComponents(),
+                        ...this.buildEfipayManagementPayload(`Falha na validacao da Efi: ${error.message}`),
                     });
                 }
                 return;
@@ -447,28 +1017,304 @@ class ManagerBotService {
                 if (!this.ensureAdminAccess(interaction, "sincronizar o webhook da Efi")) {
                     return;
                 }
-                await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
+                this.rememberAdminPanelInteraction(interaction);
+                await interaction.update(this.buildEfipayManagementPayload("Sincronizando o webhook da Efi..."));
                 try {
                     await this.dependencies.managerRuntimeConfigService.syncEfipayWebhook();
                     await this.persistStoreIfNeeded();
                     await interaction.editReply({
-                        embeds: [this.buildAdminPanelEmbed("Webhook da Efi sincronizado com sucesso.")],
-                        components: this.buildAdminPanelComponents(),
+                        ...this.buildEfipayManagementPayload("Webhook da Efi sincronizado com sucesso."),
                     });
                 }
                 catch (error) {
                     await this.persistStoreIfNeeded();
                     await interaction.editReply({
-                        embeds: [this.buildAdminPanelEmbed(`Falha ao sincronizar webhook: ${error.message}`)],
-                        components: this.buildAdminPanelComponents(),
+                        ...this.buildEfipayManagementPayload(`Falha ao sincronizar webhook: ${error.message}`),
                     });
                 }
                 return;
+            case CUSTOM_IDS.adminSales:
+                if (!this.ensureAdminAccess(interaction, "abrir as configuracoes de vendas")) {
+                    return;
+                }
+                this.rememberAdminPanelInteraction(interaction);
+                await interaction.update(this.buildSalesManagementPayload());
+                return;
+            case CUSTOM_IDS.adminSalesCartCategory:
+                if (!this.ensureAdminAccess(interaction, "configurar a categoria do carrinho")) {
+                    return;
+                }
+                this.rememberAdminPanelInteraction(interaction);
+                await interaction.update(this.buildSalesCategoryPayload());
+                return;
+            case CUSTOM_IDS.adminSalesCartCategoryClear:
+                if (!this.ensureAdminAccess(interaction, "limpar a categoria do carrinho")) {
+                    return;
+                }
+                this.dependencies.managerRuntimeConfigService.updateSalesSettings({ cartCategoryId: null });
+                await this.persistStoreIfNeeded();
+                this.rememberAdminPanelInteraction(interaction);
+                await interaction.update(this.buildSalesManagementPayload("Categoria do carrinho removida."));
+                return;
+            case CUSTOM_IDS.adminSalesCustomerRole:
+                if (!this.ensureAdminAccess(interaction, "configurar o cargo do cliente")) {
+                    return;
+                }
+                this.rememberAdminPanelInteraction(interaction);
+                await interaction.update(this.buildSalesCustomerRolePayload());
+                return;
+            case CUSTOM_IDS.adminSalesCustomerRoleClear:
+                if (!this.ensureAdminAccess(interaction, "limpar o cargo do cliente")) {
+                    return;
+                }
+                this.dependencies.managerRuntimeConfigService.updateSalesSettings({ customerRoleId: null });
+                await this.persistStoreIfNeeded();
+                this.rememberAdminPanelInteraction(interaction);
+                await interaction.update(this.buildSalesManagementPayload("Cargo do cliente removido."));
+                return;
+            case CUSTOM_IDS.adminSalesStaffRoles:
+                if (!this.ensureAdminAccess(interaction, "configurar os cargos staff do carrinho")) {
+                    return;
+                }
+                this.rememberAdminPanelInteraction(interaction);
+                await interaction.update(this.buildSalesStaffRolesPayload());
+                return;
+            case CUSTOM_IDS.adminSalesStaffRolesClear:
+                if (!this.ensureAdminAccess(interaction, "limpar os cargos staff do carrinho")) {
+                    return;
+                }
+                this.dependencies.managerRuntimeConfigService.updateSalesSettings({ cartStaffRoleIds: [] });
+                await this.persistStoreIfNeeded();
+                this.rememberAdminPanelInteraction(interaction);
+                await interaction.update(this.buildSalesManagementPayload("Cargos staff do carrinho removidos."));
+                return;
+            case CUSTOM_IDS.adminSalesTemplate:
+                if (!this.ensureAdminAccess(interaction, "configurar o nome do canal do carrinho")) {
+                    return;
+                }
+                this.rememberAdminPanelInteraction(interaction);
+                await interaction.showModal(this.buildSalesTemplateModal());
+                return;
+            case CUSTOM_IDS.adminSalesLogsChannel:
+                if (!this.ensureAdminAccess(interaction, "configurar o canal de logs privados")) {
+                    return;
+                }
+                this.rememberAdminPanelInteraction(interaction);
+                await interaction.update(this.buildSalesLogsChannelPayload());
+                return;
+            case CUSTOM_IDS.adminSalesLogsChannelClear:
+                if (!this.ensureAdminAccess(interaction, "limpar o canal de logs privados")) {
+                    return;
+                }
+                this.dependencies.managerRuntimeConfigService.updateSalesSettings({ logsChannelId: null });
+                await this.persistStoreIfNeeded();
+                this.rememberAdminPanelInteraction(interaction);
+                await interaction.update(this.buildSalesManagementPayload("Canal de logs privados removido."));
+                return;
+            case CUSTOM_IDS.adminSalesInactivity:
+                if (!this.ensureAdminAccess(interaction, "configurar a expiracao do carrinho")) {
+                    return;
+                }
+                this.rememberAdminPanelInteraction(interaction);
+                await interaction.showModal(this.buildSalesInactivityModal());
+                return;
             default:
+                if (interaction.customId.startsWith(CUSTOM_IDS.adminProductBasicPrefix)) {
+                    if (!this.ensureAdminAccess(interaction, "editar os dados do produto")) {
+                        return;
+                    }
+                    const productSlug = String(interaction.customId.slice(CUSTOM_IDS.adminProductBasicPrefix.length) ?? "").trim();
+                    this.rememberAdminPanelInteraction(interaction);
+                    await interaction.showModal(this.buildProductBasicsModal(productSlug));
+                    return;
+                }
+                if (interaction.customId.startsWith(CUSTOM_IDS.adminProductVisualPrefix)) {
+                    if (!this.ensureAdminAccess(interaction, "configurar a vitrine do produto")) {
+                        return;
+                    }
+                    const productSlug = String(interaction.customId.slice(CUSTOM_IDS.adminProductVisualPrefix.length) ?? "").trim();
+                    this.rememberAdminPanelInteraction(interaction);
+                    await interaction.showModal(this.buildProductVisualModal(productSlug));
+                    return;
+                }
+                if (interaction.customId.startsWith(CUSTOM_IDS.adminProductApprovedPrefix)) {
+                    if (!this.ensureAdminAccess(interaction, "configurar a embed de pagamento aprovado")) {
+                        return;
+                    }
+                    const productSlug = String(interaction.customId.slice(CUSTOM_IDS.adminProductApprovedPrefix.length) ?? "").trim();
+                    this.rememberAdminPanelInteraction(interaction);
+                    await interaction.showModal(this.buildProductApprovedModal(productSlug));
+                    return;
+                }
+                if (interaction.customId.startsWith(CUSTOM_IDS.adminProductSourcePrefix)) {
+                    if (!this.ensureAdminAccess(interaction, "configurar a source do produto")) {
+                        return;
+                    }
+                    const productSlug = String(interaction.customId.slice(CUSTOM_IDS.adminProductSourcePrefix.length) ?? "").trim();
+                    this.rememberAdminPanelInteraction(interaction);
+                    await interaction.showModal(this.buildProductSourceModal(productSlug));
+                    return;
+                }
+                if (interaction.customId.startsWith(CUSTOM_IDS.adminProductPlansPrefix)) {
+                    if (!this.ensureAdminAccess(interaction, "configurar os planos do produto")) {
+                        return;
+                    }
+                    const productSlug = String(interaction.customId.slice(CUSTOM_IDS.adminProductPlansPrefix.length) ?? "").trim();
+                    this.rememberAdminPanelInteraction(interaction);
+                    await interaction.showModal(this.buildProductPlansModal(productSlug));
+                    return;
+                }
+                if (interaction.customId.startsWith(CUSTOM_IDS.adminProductRolePrefix)) {
+                    if (!this.ensureAdminAccess(interaction, "configurar o cargo do produto")) {
+                        return;
+                    }
+                    const productSlug = String(interaction.customId.slice(CUSTOM_IDS.adminProductRolePrefix.length) ?? "").trim();
+                    this.rememberAdminPanelInteraction(interaction);
+                    await interaction.update(this.buildProductRolePayload(productSlug));
+                    return;
+                }
+                if (interaction.customId.startsWith(CUSTOM_IDS.adminProductRoleClearPrefix)) {
+                    if (!this.ensureAdminAccess(interaction, "limpar o cargo do produto")) {
+                        return;
+                    }
+                    const productSlug = String(interaction.customId.slice(CUSTOM_IDS.adminProductRoleClearPrefix.length) ?? "").trim();
+                    this.dependencies.catalogService.updateProduct(productSlug, { customerRoleId: null });
+                    await this.persistStoreIfNeeded();
+                    this.rememberAdminPanelInteraction(interaction);
+                    await interaction.update(this.buildProductRolePayload(productSlug, "Cargo do produto removido."));
+                    return;
+                }
+                if (interaction.customId.startsWith(CUSTOM_IDS.adminProductViewPrefix)) {
+                    if (!this.ensureAdminAccess(interaction, "abrir a configuracao do produto")) {
+                        return;
+                    }
+                    const productSlug = String(interaction.customId.slice(CUSTOM_IDS.adminProductViewPrefix.length) ?? "").trim();
+                    this.rememberAdminPanelInteraction(interaction);
+                    await interaction.update(this.buildProductManagementPayload(productSlug));
+                    return;
+                }
+                if (interaction.customId.startsWith(CUSTOM_IDS.adminProductPublishPrefix)) {
+                    if (!this.ensureStaffAccess(interaction, "publicar o painel de vendas")) {
+                        return;
+                    }
+                    const productSlug = String(interaction.customId.slice(CUSTOM_IDS.adminProductPublishPrefix.length) ?? "").trim();
+                    this.rememberAdminPanelInteraction(interaction);
+                    await interaction.update(this.buildProductPublishPayload(productSlug));
+                    return;
+                }
+                if (interaction.customId.startsWith(CUSTOM_IDS.adminProductPreviewPrefix)) {
+                    if (!this.ensureStaffAccess(interaction, "visualizar o painel de vendas")) {
+                        return;
+                    }
+                    const productSlug = String(interaction.customId.slice(CUSTOM_IDS.adminProductPreviewPrefix.length) ?? "").trim();
+                    const product = this.getResolvedProductBySlug(productSlug);
+                    if (!product) {
+                        await this.replyEphemeral(interaction, "Produto nao encontrado para preview.");
+                        return;
+                    }
+                    await this.replyEphemeral(interaction, this.buildSalesPanelMessage(product));
+                    return;
+                }
+                if (interaction.customId === CUSTOM_IDS.adminBackEfipay) {
+                    if (!this.ensureAdminAccess(interaction, "voltar ao painel principal")) {
+                        return;
+                    }
+                    this.rememberAdminPanelInteraction(interaction);
+                    await interaction.update(this.buildAdminPanelPayload());
+                    return;
+                }
+                if (interaction.customId === CUSTOM_IDS.adminBackSales) {
+                    if (!this.ensureAdminAccess(interaction, "voltar para vendas")) {
+                        return;
+                    }
+                    this.rememberAdminPanelInteraction(interaction);
+                    await interaction.update(this.buildSalesManagementPayload());
+                    return;
+                }
                 await this.replyEphemeral(interaction, "Botao ainda nao tratado pelo manager bot.");
         }
     }
     async handleSelectMenuInteraction(interaction) {
+        if (typeof interaction.customId === "string" && interaction.customId.startsWith(CUSTOM_IDS.buyPlanSelectCartPrefix)) {
+            await this.handleCartPlanSelection(interaction);
+            return;
+        }
+        if (typeof interaction.customId === "string" && interaction.customId.startsWith(CUSTOM_IDS.appsSelectPrefix)) {
+            await this.handleAppsSelection(interaction);
+            return;
+        }
+        if (interaction.customId === CUSTOM_IDS.adminProductsSelect) {
+            if (!this.ensureAdminAccess(interaction, "abrir a configuracao do produto")) {
+                return;
+            }
+            const productSlug = String(interaction.values?.[0] ?? "").trim();
+            this.rememberAdminPanelInteraction(interaction);
+            await interaction.update(this.buildProductManagementPayload(productSlug));
+            return;
+        }
+        if (interaction.customId.startsWith(CUSTOM_IDS.adminProductPublishChannelPrefix)) {
+            if (!this.ensureStaffAccess(interaction, "publicar o painel de vendas")) {
+                return;
+            }
+            const productSlug = String(interaction.customId.slice(CUSTOM_IDS.adminProductPublishChannelPrefix.length) ?? "").trim();
+            await this.handleProductPublishSelection(interaction, productSlug);
+            return;
+        }
+        if (interaction.customId.startsWith(CUSTOM_IDS.adminProductRoleSelectPrefix)) {
+            if (!this.ensureAdminAccess(interaction, "configurar o cargo do produto")) {
+                return;
+            }
+            const productSlug = String(interaction.customId.slice(CUSTOM_IDS.adminProductRoleSelectPrefix.length) ?? "").trim();
+            const roleId = String(interaction.values?.[0] ?? "").trim();
+            this.dependencies.catalogService.updateProduct(productSlug, { customerRoleId: roleId || null });
+            await this.persistStoreIfNeeded();
+            this.rememberAdminPanelInteraction(interaction);
+            await interaction.update(this.buildProductRolePayload(productSlug, "Cargo do produto atualizado."));
+            return;
+        }
+        if (interaction.customId === CUSTOM_IDS.adminSalesCategorySelect) {
+            if (!this.ensureAdminAccess(interaction, "configurar a categoria do carrinho")) {
+                return;
+            }
+            const categoryId = String(interaction.values?.[0] ?? "").trim();
+            this.dependencies.managerRuntimeConfigService.updateSalesSettings({ cartCategoryId: categoryId });
+            await this.persistStoreIfNeeded();
+            this.rememberAdminPanelInteraction(interaction);
+            await interaction.update(this.buildSalesManagementPayload("Categoria do carrinho atualizada."));
+            return;
+        }
+        if (interaction.customId === CUSTOM_IDS.adminSalesCustomerRoleSelect) {
+            if (!this.ensureAdminAccess(interaction, "configurar o cargo do cliente")) {
+                return;
+            }
+            const roleId = String(interaction.values?.[0] ?? "").trim();
+            this.dependencies.managerRuntimeConfigService.updateSalesSettings({ customerRoleId: roleId });
+            await this.persistStoreIfNeeded();
+            this.rememberAdminPanelInteraction(interaction);
+            await interaction.update(this.buildSalesManagementPayload("Cargo do cliente atualizado."));
+            return;
+        }
+        if (interaction.customId === CUSTOM_IDS.adminSalesStaffRolesSelect) {
+            if (!this.ensureAdminAccess(interaction, "configurar os cargos staff do carrinho")) {
+                return;
+            }
+            this.dependencies.managerRuntimeConfigService.updateSalesSettings({ cartStaffRoleIds: interaction.values ?? [] });
+            await this.persistStoreIfNeeded();
+            this.rememberAdminPanelInteraction(interaction);
+            await interaction.update(this.buildSalesManagementPayload("Cargos staff do carrinho atualizados."));
+            return;
+        }
+        if (interaction.customId === CUSTOM_IDS.adminSalesLogsChannelSelect) {
+            if (!this.ensureAdminAccess(interaction, "configurar o canal de logs privados")) {
+                return;
+            }
+            const channelId = String(interaction.values?.[0] ?? "").trim();
+            this.dependencies.managerRuntimeConfigService.updateSalesSettings({ logsChannelId: channelId || null });
+            await this.persistStoreIfNeeded();
+            this.rememberAdminPanelInteraction(interaction);
+            await interaction.update(this.buildSalesManagementPayload("Canal de logs privados atualizado."));
+            return;
+        }
         switch (interaction.customId) {
             case CUSTOM_IDS.buyPlanSelect:
                 await this.handleBuyPlanSelection(interaction);
@@ -488,22 +1334,99 @@ class ManagerBotService {
             await this.handleEfipayConfigModal(interaction);
             return;
         }
+        if (interaction.customId === MODAL_IDS.efipayUpload) {
+            await this.handleEfipayUploadModal(interaction);
+            return;
+        }
+        if (interaction.customId === MODAL_IDS.salesTemplate) {
+            await this.handleSalesTemplateModal(interaction);
+            return;
+        }
+        if (interaction.customId === MODAL_IDS.salesInactivity) {
+            await this.handleSalesInactivityModal(interaction);
+            return;
+        }
+        if (interaction.customId === MODAL_IDS.productCreate) {
+            await this.handleCreateProductModal(interaction);
+            return;
+        }
+        if (interaction.customId.startsWith(MODAL_IDS.productBasicPrefix)) {
+            await this.handleProductBasicsModal(interaction);
+            return;
+        }
+        if (interaction.customId.startsWith(MODAL_IDS.productVisualPrefix)) {
+            await this.handleProductVisualModal(interaction);
+            return;
+        }
+        if (interaction.customId.startsWith(MODAL_IDS.productApprovedPrefix)) {
+            await this.handleProductApprovedModal(interaction);
+            return;
+        }
+        if (interaction.customId.startsWith(MODAL_IDS.productSourcePrefix)) {
+            await this.handleProductSourceModal(interaction);
+            return;
+        }
+        if (interaction.customId.startsWith(MODAL_IDS.productPlansPrefix)) {
+            await this.handleProductPlansModal(interaction);
+            return;
+        }
         if (interaction.customId.startsWith(MODAL_IDS.botSetupPrefix)) {
             await this.handleBotSetupModal(interaction);
             return;
         }
+        if (interaction.customId.startsWith(MODAL_IDS.appRenamePrefix)) {
+            await this.handleAppsRenameModal(interaction);
+            return;
+        }
+        if (interaction.customId.startsWith(MODAL_IDS.appTokenPrefix)) {
+            await this.handleAppsTokenModal(interaction);
+            return;
+        }
+        if (interaction.customId.startsWith(MODAL_IDS.appOwnerPrefix)) {
+            await this.handleAppsOwnerModal(interaction);
+            return;
+        }
+        if (interaction.customId.startsWith(MODAL_IDS.appTransferPrefix)) {
+            await this.handleAppsTransferModal(interaction);
+            return;
+        }
+        if (interaction.customId.startsWith(MODAL_IDS.appDeletePrefix)) {
+            await this.handleAppsDeleteModal(interaction);
+            return;
+        }
         await this.replyEphemeral(interaction, "Modal ainda nao tratado pelo manager bot.");
     }
+    async handleAutocompleteInteraction(interaction) {
+        if (!["config", "set"].includes(interaction.commandName)) {
+            await interaction.respond([]).catch(() => null);
+            return;
+        }
+        const subcommand = interaction.options.getSubcommand(false);
+        if (subcommand !== "produto") {
+            await interaction.respond([]).catch(() => null);
+            return;
+        }
+        const focused = interaction.options.getFocused(true);
+        if (focused.name !== "produto") {
+            await interaction.respond([]).catch(() => null);
+            return;
+        }
+        const choices = this.buildProductAutocompleteChoices(focused.value);
+        await interaction.respond(choices).catch(() => null);
+    }
     async handleAppsCommand(interaction) {
-        const bundles = this.dependencies.subscriptionService.listByDiscordUserId(interaction.user.id);
-        if (bundles.length === 0) {
+        const entries = this.buildOwnedAppEntries(interaction.user.id);
+        if (entries.length === 0) {
             await this.replyEphemeral(interaction, "Voce ainda nao tem apps comprados no manager. Quando fizer a primeira compra, tudo aparece aqui.");
             return;
         }
-        await this.replyEphemeral(interaction, {
-            embeds: [this.buildAppsEmbed(bundles, interaction.user.id)],
-            components: this.buildAppsComponents(bundles),
-        });
+        if (interaction.guild) {
+            await this.tryGrantCustomerRole(interaction.guild, interaction.user.id).catch(() => null);
+        }
+        await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
+        const payload = await this.buildAppsPanelPayload(interaction.user.id);
+        await interaction.editReply(payload);
+        this.rememberAppsPanelInteraction(interaction);
     }
     async handleRenewCommand(interaction) {
         const quantity = interaction.options.getInteger("quantidade") ?? 1;
@@ -532,11 +1455,18 @@ class ManagerBotService {
             }
             return;
         }
-        const options = bundles.slice(0, 25).map((bundle) => ({
+        const options = bundles
+            .filter((bundle) => String(bundle?.subscription?.id ?? "").trim())
+            .slice(0, 25)
+            .map((bundle) => ({
             label: `${bundle.product?.name ?? "Produto"} - ${bundle.plan?.name ?? "Plano"}`.slice(0, 100),
             description: `Status ${this.getStatusLabel(bundle.subscription.status)} - vence ${this.formatIsoDate(bundle.subscription.currentPeriodEnd)}`.slice(0, 100),
-            value: `${bundle.subscription.id}|${quantity}`,
+            value: `${String(bundle.subscription.id).trim()}|${quantity}`,
         }));
+        if (options.length === 0) {
+            await this.replyEphemeral(interaction, "Nao encontrei assinaturas validas para renovar agora.");
+            return;
+        }
         const row = new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.StringSelectMenuBuilder()
             .setCustomId(CUSTOM_IDS.renewSelect)
             .setPlaceholder("Escolha qual assinatura voce quer renovar")
@@ -551,9 +1481,9 @@ class ManagerBotService {
             return;
         }
         const productSlug = String(interaction.options.getString("produto_slug", true) ?? "").trim();
-        const product = this.dependencies.catalogService.getProductBySlug(productSlug);
+        const product = this.getResolvedProductBySlug(productSlug);
         if (!product) {
-            await this.replyEphemeral(interaction, "Produto nao encontrado. Use `/criarpainel` ou confira o slug.");
+            await this.replyEphemeral(interaction, "Produto nao encontrado. Abra `/painel-manager` e use a tela **Produtos** para criar ou selecionar um item valido.");
             return;
         }
         const targetChannel = interaction.options.getChannel("canal") ?? interaction.channel;
@@ -561,8 +1491,8 @@ class ManagerBotService {
             await this.replyEphemeral(interaction, "Escolha um canal de texto valido para publicar o painel.");
             return;
         }
-        await targetChannel.send(this.buildSalesPanelMessage(product));
-        await this.replyEphemeral(interaction, `Painel de vendas de **${product.name}** publicado em ${targetChannel.toString()}.`);
+        const result = await this.publishOrUpdateSalesPanel(product, targetChannel);
+        await this.replyEphemeral(interaction, `Painel de vendas de **${product.name}** ${result.action === "updated" ? "atualizado" : "publicado"} em ${targetChannel.toString()}.`);
     }
     async handleCreatePanelCommand(interaction) {
         if (!this.ensureAdminAccess(interaction, "criar produto/painel")) {
@@ -678,6 +1608,9 @@ class ManagerBotService {
                 this.dependencies.managerRuntimeConfigService.updateRuntimeSourceConfig(product.sourceSlug, sourceUpdate);
             }
             await this.persistStoreIfNeeded();
+            await this.syncPublishedSalesPanel(productSlug).catch((error) => {
+                this.logger.warn({ error: error?.message ?? String(error), productSlug }, "Falha ao sincronizar painel publicado apos atualizar via comando.");
+            });
             const warnings = [];
             if (sourceType === "project_dir") {
                 warnings.push("Aviso: `project_dir` so funciona se essa pasta existir no servidor hospedado. Para producao, prefira `artifact_path` ou `github_repo`.");
@@ -694,14 +1627,635 @@ class ManagerBotService {
             await this.replyEphemeral(interaction, `Nao consegui configurar o produto/painel: ${error.message}`);
         }
     }
+    async handleCreateProductModal(interaction) {
+        if (!this.ensureAdminAccess(interaction, "criar produto/painel")) {
+            return;
+        }
+        await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
+        try {
+            const product = this.dependencies.catalogService.createProduct({
+                slug: interaction.fields.getTextInputValue("product_slug"),
+                name: interaction.fields.getTextInputValue("product_name"),
+                description: interaction.fields.getTextInputValue("product_description"),
+            });
+            if (product?.sourceSlug) {
+                this.dependencies.managerRuntimeConfigService.updateRuntimeSourceConfig(product.sourceSlug, {
+                    displayName: product.name,
+                });
+            }
+            await this.persistStoreIfNeeded();
+            const payload = this.buildProductManagementPayload(product.slug, `Produto **${product.name}** criado com sucesso.`);
+            const updated = await this.tryUpdateTrackedAdminPanel(interaction.user.id, payload);
+            if (updated) {
+                await interaction.deleteReply().catch(() => null);
+                return;
+            }
+            await interaction.editReply(payload);
+        }
+        catch (error) {
+            const message = `Nao consegui criar o produto/painel: ${error.message}`;
+            const payload = this.buildProductCatalogPayload(message);
+            const updated = await this.tryUpdateTrackedAdminPanel(interaction.user.id, payload);
+            if (updated) {
+                await interaction.deleteReply().catch(() => null);
+                return;
+            }
+            await interaction.editReply(payload);
+        }
+    }
+    async handleProductBasicsModal(interaction) {
+        if (!this.ensureAdminAccess(interaction, "editar os dados do produto")) {
+            return;
+        }
+        const productSlug = String(interaction.customId.slice(MODAL_IDS.productBasicPrefix.length) ?? "").trim();
+        await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
+        try {
+            const currentProduct = this.dependencies.catalogService.getProductBySlug(productSlug);
+            const currentPanelConfig = currentProduct?.panelConfig ?? {};
+            const productName = interaction.fields.getTextInputValue("product_name");
+            const productDescription = interaction.fields.getTextInputValue("product_description");
+            const product = this.dependencies.catalogService.updateProduct(productSlug, {
+                name: productName,
+                description: productDescription,
+                tutorialUrl: this.normalizeConfigStringInput(interaction.fields.getTextInputValue("product_tutorial_url")),
+                panelConfig: {
+                    ...currentPanelConfig,
+                    title: this.normalizeConfigStringInput(productName) ?? currentPanelConfig.title ?? null,
+                    summary: this.normalizeConfigStringInput(productDescription) ?? currentPanelConfig.summary ?? null,
+                    details: currentPanelConfig.details ?? null,
+                    imageUrl: this.normalizeConfigStringInput(interaction.fields.getTextInputValue("panel_image_url")) ?? currentPanelConfig.imageUrl ?? null,
+                    previewUrl: this.normalizeConfigStringInput(interaction.fields.getTextInputValue("panel_preview_url")) ?? currentPanelConfig.previewUrl ?? null,
+                    buttonLabel: currentPanelConfig.buttonLabel ?? null,
+                    pricePrefix: currentPanelConfig.pricePrefix ?? "Planos a partir de",
+                    footerText: currentPanelConfig.footerText ?? null,
+                },
+            });
+            if (product?.sourceSlug) {
+                this.dependencies.managerRuntimeConfigService.updateRuntimeSourceConfig(product.sourceSlug, {
+                    displayName: product.name,
+                });
+            }
+            await this.persistStoreIfNeeded();
+            await this.syncPublishedSalesPanel(productSlug).catch((error) => {
+                this.logger.warn({ error: error?.message ?? String(error), productSlug }, "Falha ao sincronizar painel publicado apos atualizar o produto.");
+            });
+            const payload = this.buildProductManagementPayload(productSlug, "Configuracao do produto atualizada.");
+            const updated = await this.tryUpdateTrackedAdminPanel(interaction.user.id, payload);
+            if (updated) {
+                await interaction.deleteReply().catch(() => null);
+                return;
+            }
+            await interaction.editReply(payload);
+        }
+        catch (error) {
+            const payload = this.buildProductManagementPayload(productSlug, `Falha ao atualizar os dados do produto: ${error.message}`);
+            const updated = await this.tryUpdateTrackedAdminPanel(interaction.user.id, payload);
+            if (updated) {
+                await interaction.deleteReply().catch(() => null);
+                return;
+            }
+            await interaction.editReply(payload);
+        }
+    }
+    async handleProductVisualModal(interaction) {
+        if (!this.ensureAdminAccess(interaction, "configurar a vitrine do produto")) {
+            return;
+        }
+        const productSlug = String(interaction.customId.slice(MODAL_IDS.productVisualPrefix.length) ?? "").trim();
+        await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
+        try {
+            const product = this.dependencies.catalogService.getProductBySlug(productSlug);
+            const currentPanelConfig = product?.panelConfig ?? {};
+            this.dependencies.catalogService.updateProduct(productSlug, {
+                panelConfig: {
+                    ...currentPanelConfig,
+                    title: this.normalizeConfigStringInput(interaction.fields.getTextInputValue("panel_title")),
+                    summary: this.normalizeConfigStringInput(interaction.fields.getTextInputValue("panel_summary")),
+                    details: this.normalizeConfigStringInput(interaction.fields.getTextInputValue("panel_details")),
+                    imageUrl: currentPanelConfig.imageUrl ?? null,
+                    embedColor: this.normalizePanelEmbedColorInput(interaction.fields.getTextInputValue("panel_embed_color")),
+                    buttonLabel: currentPanelConfig.buttonLabel ?? null,
+                    pricePrefix: this.normalizeConfigStringInput(interaction.fields.getTextInputValue("panel_price_prefix")),
+                    footerText: currentPanelConfig.footerText ?? null,
+                },
+            });
+            await this.persistStoreIfNeeded();
+            await this.syncPublishedSalesPanel(productSlug).catch((error) => {
+                this.logger.warn({ error: error?.message ?? String(error), productSlug }, "Falha ao sincronizar painel publicado apos atualizar a vitrine.");
+            });
+            const payload = this.buildProductManagementPayload(productSlug, "Visual do produto atualizado.");
+            const updated = await this.tryUpdateTrackedAdminPanel(interaction.user.id, payload);
+            if (updated) {
+                await interaction.deleteReply().catch(() => null);
+                return;
+            }
+            await interaction.editReply(payload);
+        }
+        catch (error) {
+            const payload = this.buildProductManagementPayload(productSlug, `Falha ao atualizar a vitrine do produto: ${error.message}`);
+            const updated = await this.tryUpdateTrackedAdminPanel(interaction.user.id, payload);
+            if (updated) {
+                await interaction.deleteReply().catch(() => null);
+                return;
+            }
+            await interaction.editReply(payload);
+        }
+    }
+    async handleProductApprovedModal(interaction) {
+        if (!this.ensureAdminAccess(interaction, "configurar a embed de pagamento aprovado")) {
+            return;
+        }
+        const productSlug = String(interaction.customId.slice(MODAL_IDS.productApprovedPrefix.length) ?? "").trim();
+        await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
+        try {
+            const product = this.dependencies.catalogService.getProductBySlug(productSlug);
+            const currentPanelConfig = product?.panelConfig ?? {};
+            this.dependencies.catalogService.updateProduct(productSlug, {
+                panelConfig: {
+                    ...currentPanelConfig,
+                    approvedTitle: this.normalizeConfigStringInput(interaction.fields.getTextInputValue("approved_title")),
+                    approvedDescription: this.normalizeConfigStringInput(interaction.fields.getTextInputValue("approved_description")),
+                    approvedImageUrl: this.normalizeConfigStringInput(interaction.fields.getTextInputValue("approved_image_url")),
+                    approvedEmbedColor: this.normalizePanelEmbedColorInput(interaction.fields.getTextInputValue("approved_embed_color")),
+                },
+            });
+            await this.persistStoreIfNeeded();
+            const payload = this.buildProductManagementPayload(productSlug, "Embed de pagamento aprovado atualizada.");
+            const updated = await this.tryUpdateTrackedAdminPanel(interaction.user.id, payload);
+            if (updated) {
+                await interaction.deleteReply().catch(() => null);
+                return;
+            }
+            await interaction.editReply(payload);
+        }
+        catch (error) {
+            const payload = this.buildProductManagementPayload(productSlug, `Falha ao atualizar a embed de pagamento aprovado: ${error.message}`);
+            const updated = await this.tryUpdateTrackedAdminPanel(interaction.user.id, payload);
+            if (updated) {
+                await interaction.deleteReply().catch(() => null);
+                return;
+            }
+            await interaction.editReply(payload);
+        }
+    }
+    async handleProductSourceModal(interaction) {
+        if (!this.ensureAdminAccess(interaction, "configurar a source do produto")) {
+            return;
+        }
+        const productSlug = String(interaction.customId.slice(MODAL_IDS.productSourcePrefix.length) ?? "").trim();
+        await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
+        try {
+            const nextSourceSlug = this.normalizeConfigStringInput(interaction.fields.getTextInputValue("source_slug")) ?? productSlug;
+            const githubRepoInput = interaction.fields.getTextInputValue("source_repo");
+            const githubRepo = this.normalizeGitHubRepoInput(githubRepoInput);
+            const githubRef = this.normalizeConfigStringInput(interaction.fields.getTextInputValue("source_ref")) ?? "main";
+            const githubPath = this.normalizeConfigStringInput(interaction.fields.getTextInputValue("source_path"));
+            const excludePaths = this.parseCsvConfigList(interaction.fields.getTextInputValue("source_exclude"));
+            const product = this.dependencies.catalogService.updateProduct(productSlug, {
+                sourceSlug: nextSourceSlug,
+            });
+            this.dependencies.managerRuntimeConfigService.updateRuntimeSourceConfig(product?.sourceSlug ?? nextSourceSlug, {
+                displayName: product?.name,
+                artifactPath: null,
+                projectDir: null,
+                githubRepo,
+                githubRef,
+                githubPath,
+                excludePaths,
+            });
+            await this.persistStoreIfNeeded();
+            const payload = this.buildProductManagementPayload(productSlug, "Source do produto atualizada para o GitHub.");
+            const updated = await this.tryUpdateTrackedAdminPanel(interaction.user.id, payload);
+            if (updated) {
+                await interaction.deleteReply().catch(() => null);
+                return;
+            }
+            await interaction.editReply(payload);
+        }
+        catch (error) {
+            const payload = this.buildProductManagementPayload(productSlug, `Falha ao atualizar a source do produto: ${error.message}`);
+            const updated = await this.tryUpdateTrackedAdminPanel(interaction.user.id, payload);
+            if (updated) {
+                await interaction.deleteReply().catch(() => null);
+                return;
+            }
+            await interaction.editReply(payload);
+        }
+    }
+    async handleProductPlansModal(interaction) {
+        if (!this.ensureAdminAccess(interaction, "configurar os planos do produto")) {
+            return;
+        }
+        const productSlug = String(interaction.customId.slice(MODAL_IDS.productPlansPrefix.length) ?? "").trim();
+        await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
+        try {
+            const parsePlanField = (fieldId) => {
+                return this.parseCurrencyInputToCents(interaction.fields.getTextInputValue(fieldId));
+            };
+            this.dependencies.catalogService.updateProduct(productSlug, {
+                planPrices: {
+                    weekly: parsePlanField("plan_weekly"),
+                    monthly: parsePlanField("plan_monthly"),
+                    quarterly: parsePlanField("plan_quarterly"),
+                    semiannual: parsePlanField("plan_semiannual"),
+                    annual: parsePlanField("plan_annual"),
+                },
+            });
+            await this.persistStoreIfNeeded();
+            await this.syncPublishedSalesPanel(productSlug).catch((error) => {
+                this.logger.warn({ error: error?.message ?? String(error), productSlug }, "Falha ao sincronizar painel publicado apos atualizar os planos.");
+            });
+            const payload = this.buildProductManagementPayload(productSlug, "Planos atualizados com sucesso.");
+            const updated = await this.tryUpdateTrackedAdminPanel(interaction.user.id, payload);
+            if (updated) {
+                await interaction.deleteReply().catch(() => null);
+                return;
+            }
+            await interaction.editReply(payload);
+        }
+        catch (error) {
+            const payload = this.buildProductManagementPayload(productSlug, `Falha ao atualizar os planos: ${error.message}`);
+            const updated = await this.tryUpdateTrackedAdminPanel(interaction.user.id, payload);
+            if (updated) {
+                await interaction.deleteReply().catch(() => null);
+                return;
+            }
+            await interaction.editReply(payload);
+        }
+    }
+    async handleProductPublishSelection(interaction, productSlug) {
+        const selectedChannelId = String(interaction.values?.[0] ?? "").trim();
+        this.rememberAdminPanelInteraction(interaction);
+        const product = this.getResolvedProductBySlug(productSlug);
+        if (!product) {
+            await interaction.update(this.buildProductCatalogPayload("Produto nao encontrado para publicacao."));
+            return;
+        }
+        const targetChannel = interaction.guild?.channels?.cache?.get(selectedChannelId) ??
+            (selectedChannelId ? await interaction.guild?.channels.fetch(selectedChannelId).catch(() => null) : null);
+        if (!targetChannel || !targetChannel.isTextBased?.()) {
+            await interaction.update(this.buildProductPublishPayload(productSlug, "Escolha um canal de texto valido para publicar o painel."));
+            return;
+        }
+        try {
+            const result = await this.publishOrUpdateSalesPanel(product, targetChannel);
+            await interaction.update(this.buildProductManagementPayload(productSlug, `Painel de vendas de **${product.name}** ${result.action === "updated" ? "atualizado" : "publicado"} em ${targetChannel.toString()}.`));
+        }
+        catch (error) {
+            await interaction.update(this.buildProductPublishPayload(productSlug, `Falha ao publicar o painel: ${error.message}`));
+        }
+    }
+    async handleSalesTemplateModal(interaction) {
+        if (!this.ensureAdminAccess(interaction, "configurar o nome do canal do carrinho")) {
+            return;
+        }
+        await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
+        try {
+            const template = String(interaction.fields.getTextInputValue("sales_cart_channel_template") ?? "").trim();
+            this.dependencies.managerRuntimeConfigService.updateSalesSettings({
+                cartChannelNameTemplate: template || "carrinho-{user}",
+            });
+            await this.persistStoreIfNeeded();
+            const payload = this.buildSalesManagementPayload("Template do canal do carrinho atualizado.");
+            const updated = await this.tryUpdateTrackedAdminPanel(interaction.user.id, payload);
+            if (updated) {
+                await interaction.deleteReply().catch(() => null);
+                return;
+            }
+            await interaction.editReply(payload);
+        }
+        catch (error) {
+            const payload = this.buildSalesManagementPayload(`Falha ao atualizar o template do canal: ${error.message}`);
+            const updated = await this.tryUpdateTrackedAdminPanel(interaction.user.id, payload);
+            if (updated) {
+                await interaction.deleteReply().catch(() => null);
+                return;
+            }
+            await interaction.editReply(payload);
+        }
+    }
+    async handleSalesInactivityModal(interaction) {
+        if (!this.ensureAdminAccess(interaction, "configurar a expiracao do carrinho")) {
+            return;
+        }
+        await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
+        try {
+            const rawValue = String(interaction.fields.getTextInputValue("sales_cart_inactivity_minutes") ?? "").trim().replace(",", ".");
+            const parsedMinutes = Number(rawValue);
+            if (!Number.isFinite(parsedMinutes) || parsedMinutes <= 0) {
+                throw new Error("Informe um tempo valido em minutos.");
+            }
+            const normalizedMinutes = Math.min(5, Math.max(1, Math.round(parsedMinutes)));
+            this.dependencies.managerRuntimeConfigService.updateSalesSettings({
+                cartInactivityMinutes: normalizedMinutes,
+            });
+            await this.persistStoreIfNeeded();
+            await this.rehydrateExistingCartTimers().catch(() => null);
+            const payload = this.buildSalesManagementPayload(`Expiracao dos carrinhos atualizada para ${normalizedMinutes} minuto(s).`);
+            const updated = await this.tryUpdateTrackedAdminPanel(interaction.user.id, payload);
+            if (updated) {
+                await interaction.deleteReply().catch(() => null);
+                return;
+            }
+            await interaction.editReply(payload);
+        }
+        catch (error) {
+            const payload = this.buildSalesManagementPayload(`Falha ao atualizar a expiracao do carrinho: ${error.message}`);
+            const updated = await this.tryUpdateTrackedAdminPanel(interaction.user.id, payload);
+            if (updated) {
+                await interaction.deleteReply().catch(() => null);
+                return;
+            }
+            await interaction.editReply(payload);
+        }
+    }
+    async handleCartPlanSelection(interaction) {
+        const payload = String(interaction.customId.slice(CUSTOM_IDS.buyPlanSelectCartPrefix.length) ?? "").trim();
+        const separatorIndex = payload.indexOf(":");
+        const ownerUserId = separatorIndex >= 0 ? payload.slice(0, separatorIndex) : "";
+        const productSlug = separatorIndex >= 0 ? payload.slice(separatorIndex + 1) : "";
+        if (!ownerUserId || !productSlug) {
+            await this.replyEphemeral(interaction, "Carrinho invalido.");
+            return;
+        }
+        if (interaction.user.id !== ownerUserId && !this.hasAdminAccess(interaction)) {
+            await this.replyEphemeral(interaction, "Somente o dono desse carrinho pode continuar a compra.");
+            return;
+        }
+        const [_selectedProductSlug, planCode] = String(interaction.values?.[0] ?? "").split("|");
+        const product = this.getResolvedProductBySlug(productSlug) ?? this.getPrimaryProduct();
+        if (!product) {
+            await this.replyEphemeral(interaction, "Nenhum produto esta disponivel no manager.");
+            return;
+        }
+        await interaction.deferUpdate().catch(() => null);
+        const ownerUser = interaction.user.id === ownerUserId
+            ? interaction.user
+            : (await interaction.guild?.members.fetch(ownerUserId).catch(() => null))?.user ?? { id: ownerUserId, username: ownerUserId };
+        try {
+            const currentState = this.getCartStateFromChannel(interaction.channel, product, interaction.message);
+            const nextState = await this.persistCartState(interaction.channel, ownerUser, product, {
+                ...currentState,
+                planCode,
+                step: "plan",
+            });
+            await this.updateCartInteractionMessage(interaction, this.buildCartPanelPayload(product, ownerUser, nextState));
+        }
+        catch (error) {
+            await this.replyEphemeral(interaction, `Nao consegui atualizar o carrinho agora: ${error?.message ?? "falha desconhecida"}`);
+        }
+    }
+    async createOrReuseCartChannel(guild, user, product) {
+        const sales = this.dependencies.managerRuntimeConfigService.getResolvedSalesSettings();
+        const existing = this.findCartChannelForUser(guild, user.id);
+        if (existing) {
+            return { channel: existing, created: false };
+        }
+        const botUserId = this.client?.user?.id;
+        if (!botUserId) {
+            throw new Error("Bot do manager ainda nao esta pronto para abrir carrinhos.");
+        }
+        const rawPermissionOverwrites = [
+            {
+                id: guild.roles.everyone.id,
+                type: discord_js_1.OverwriteType.Role,
+                deny: [discord_js_1.PermissionFlagsBits.ViewChannel],
+            },
+            {
+                id: user.id,
+                type: discord_js_1.OverwriteType.Member,
+                allow: [
+                    discord_js_1.PermissionFlagsBits.ViewChannel,
+                    discord_js_1.PermissionFlagsBits.SendMessages,
+                    discord_js_1.PermissionFlagsBits.ReadMessageHistory,
+                    discord_js_1.PermissionFlagsBits.AttachFiles,
+                    discord_js_1.PermissionFlagsBits.EmbedLinks,
+                ],
+            },
+            {
+                id: botUserId,
+                type: discord_js_1.OverwriteType.Member,
+                allow: [
+                    discord_js_1.PermissionFlagsBits.ViewChannel,
+                    discord_js_1.PermissionFlagsBits.SendMessages,
+                    discord_js_1.PermissionFlagsBits.ReadMessageHistory,
+                    discord_js_1.PermissionFlagsBits.AttachFiles,
+                    discord_js_1.PermissionFlagsBits.EmbedLinks,
+                    discord_js_1.PermissionFlagsBits.ManageChannels,
+                    discord_js_1.PermissionFlagsBits.ManageMessages,
+                ],
+            },
+            ...sales.cartStaffRoleIds.map((roleId) => ({
+                id: roleId,
+                type: discord_js_1.OverwriteType.Role,
+                allow: [
+                    discord_js_1.PermissionFlagsBits.ViewChannel,
+                    discord_js_1.PermissionFlagsBits.SendMessages,
+                    discord_js_1.PermissionFlagsBits.ReadMessageHistory,
+                ],
+            })),
+            ...this.dependencies.managerRuntimeConfigService.getResolvedAccessControl().adminUserIds.map((userId) => ({
+                id: userId,
+                type: discord_js_1.OverwriteType.Member,
+                allow: [
+                    discord_js_1.PermissionFlagsBits.ViewChannel,
+                    discord_js_1.PermissionFlagsBits.SendMessages,
+                    discord_js_1.PermissionFlagsBits.ReadMessageHistory,
+                    discord_js_1.PermissionFlagsBits.ManageMessages,
+                ],
+            })),
+            ...this.applicationOwnerUserIds.map((userId) => ({
+                id: userId,
+                type: discord_js_1.OverwriteType.Member,
+                allow: [
+                    discord_js_1.PermissionFlagsBits.ViewChannel,
+                    discord_js_1.PermissionFlagsBits.SendMessages,
+                    discord_js_1.PermissionFlagsBits.ReadMessageHistory,
+                    discord_js_1.PermissionFlagsBits.ManageMessages,
+                ],
+            })),
+        ];
+        const permissionOverwriteMap = new Map();
+        for (const overwrite of rawPermissionOverwrites) {
+            if (!overwrite?.id) {
+                continue;
+            }
+            permissionOverwriteMap.set(String(overwrite.id), overwrite);
+        }
+        const permissionOverwrites = [...permissionOverwriteMap.values()];
+        const channelName = this.resolveCartChannelName(sales.cartChannelNameTemplate, user, product);
+        const createdChannel = await guild.channels.create({
+            name: channelName,
+            type: discord_js_1.ChannelType.GuildText,
+            parent: sales.cartCategoryId ?? undefined,
+            topic: this.buildCartTopic(user, product, this.normalizeCartState({ step: "plan" }, product)),
+            permissionOverwrites,
+        });
+        return { channel: createdChannel, created: true };
+    }
+    findCartChannelForUser(guild, userId) {
+        return guild.channels.cache.find((channel) => channel?.type === discord_js_1.ChannelType.GuildText &&
+            String(channel.topic ?? "").includes(`user:${userId}`)) ?? null;
+    }
+    resolveCartChannelName(template, user, product) {
+        const rawTemplate = String(template ?? "carrinho-{user}").trim() || "carrinho-{user}";
+        const resolved = rawTemplate
+            .replace(/\{user(name)?\}/giu, user.username)
+            .replace(/\{produto\}/giu, product.slug)
+            .replace(/\{product\}/giu, product.slug);
+        return resolved
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "")
+            .toLowerCase()
+            .replace(/[^a-z0-9-_]+/g, "-")
+            .replace(/-+/g, "-")
+            .replace(/^-+|-+$/g, "")
+            .slice(0, 90) || `carrinho-${user.username}`.toLowerCase().replace(/[^a-z0-9-_]+/g, "-").slice(0, 90);
+    }
+    async upsertCartPanelMessage(channel, user, product) {
+        const existingMessages = await channel.messages.fetch({ limit: 20 }).catch(() => null);
+        const state = this.getCartStateFromChannel(channel, product);
+        const existing = this.findCartMessage(existingMessages, user.id, product.slug);
+        const payload = this.buildCartPanelPayload(product, user, state);
+        if (existing) {
+            await existing.edit(payload);
+            return existing;
+        }
+        return channel.send(payload);
+    }
+    async tryGrantCustomerRole(guild, userId) {
+        const sales = this.dependencies.managerRuntimeConfigService.getResolvedSalesSettings();
+        const bundles = this.dependencies.subscriptionService
+            .listByDiscordUserId(userId)
+            .filter((bundle) => ["active", "grace"].includes(String(bundle?.subscription?.status ?? "").toLowerCase()));
+        if (bundles.length === 0) {
+            return false;
+        }
+        const member = await guild.members.fetch(userId).catch(() => null);
+        if (!member) {
+            return false;
+        }
+        const roleIds = new Set();
+        if (sales.autoAssignCustomerRole && sales.customerRoleId) {
+            roleIds.add(sales.customerRoleId);
+        }
+        for (const bundle of bundles) {
+            const productRoleId = String(bundle?.product?.customerRoleId ?? "").trim();
+            if (productRoleId) {
+                roleIds.add(productRoleId);
+            }
+        }
+        let grantedAny = false;
+        for (const roleId of roleIds) {
+            if (member.roles.cache.has(roleId)) {
+                continue;
+            }
+            await member.roles.add(roleId, "Cliente com assinatura ativa no manager").catch(() => null);
+            grantedAny = true;
+        }
+        return grantedAny || roleIds.size > 0;
+    }
+    startCustomerRoleSyncTimer() {
+        this.stopCustomerRoleSyncTimer();
+        this.customerRoleSyncTimer = setInterval(() => {
+            void this.syncAllConfiguredCustomerRoles().catch((error) => {
+                this.logger.warn({ error: error?.message ?? String(error) }, "Falha ao sincronizar cargos de clientes.");
+            });
+        }, 5 * 60 * 1000);
+    }
+    stopCustomerRoleSyncTimer() {
+        if (!this.customerRoleSyncTimer) {
+            return;
+        }
+        clearInterval(this.customerRoleSyncTimer);
+        this.customerRoleSyncTimer = null;
+    }
+    async syncAllConfiguredCustomerRoles() {
+        if (!this.client) {
+            return;
+        }
+        const activeUserIds = [...new Set(this.dependencies.store.subscriptions
+                .filter((subscription) => ["active", "grace"].includes(String(subscription.status ?? "").toLowerCase()))
+                .map((subscription) => {
+                const customer = this.dependencies.store.customers.find((entry) => entry.id === subscription.customerId);
+                return String(subscription.commercialOwnerDiscordUserId ?? customer?.discordUserId ?? "").trim();
+            })
+                .filter(Boolean))];
+        if (activeUserIds.length === 0) {
+            return;
+        }
+        for (const guild of this.client.guilds.cache.values()) {
+            const sales = this.dependencies.managerRuntimeConfigService.getResolvedSalesSettings();
+            const hasProductRoles = this.dependencies.catalogService
+                .listProducts()
+                .some((product) => String(product?.customerRoleId ?? "").trim());
+            if ((!sales.autoAssignCustomerRole || !sales.customerRoleId) && !hasProductRoles) {
+                continue;
+            }
+            for (const userId of activeUserIds) {
+                await this.tryGrantCustomerRole(guild, userId).catch(() => null);
+            }
+        }
+    }
     async handleManagerPanelCommand(interaction) {
         if (!this.ensureAdminAccess(interaction, "abrir o painel do manager")) {
             return;
         }
-        await this.replyEphemeral(interaction, {
-            embeds: [this.buildAdminPanelEmbed()],
-            components: this.buildAdminPanelComponents(),
-        });
+        try {
+            await this.replyEphemeral(interaction, this.buildAdminPanelPayload());
+            this.rememberAdminPanelInteraction(interaction);
+        }
+        catch (error) {
+            this.logger.warn({
+                error: error instanceof Error ? error.message : String(error),
+            }, "Falha ao abrir o painel principal com componentes completos. Tentando versao simplificada.");
+            await this.replyEphemeral(interaction, this.buildAdminPanelPayload("Painel aberto em modo simplificado para contornar uma incompatibilidade visual temporaria.", [], this.buildAdminPanelComponents(false)));
+            this.rememberAdminPanelInteraction(interaction);
+        }
+    }
+    async handleConfigCommand(interaction) {
+        if (!this.ensureAdminAccess(interaction, "abrir a configuracao visual")) {
+            return;
+        }
+        const subcommand = interaction.options.getSubcommand();
+        if (subcommand !== "produto") {
+            await this.replyEphemeral(interaction, "Subcomando ainda nao tratado.");
+            return;
+        }
+        const search = String(interaction.options.getString("produto") ?? interaction.options.getString("name") ?? "").trim();
+        const product = this.findProductBySearch(search);
+        if (!product) {
+            await this.replyEphemeral(interaction, search
+                ? `Nao encontrei produto com o nome/slug \`${search}\`.`
+                : "Nenhum produto encontrado. Use `/painel-manager` > `Produtos` para criar o primeiro.");
+            return;
+        }
+        const payload = this.buildProductManagementPayload(product.slug, `Produto **${product.name}** aberto na configuracao visual.`);
+        await this.replyEphemeral(interaction, payload);
+        this.rememberAdminPanelInteraction(interaction);
+    }
+    async handleSetCommand(interaction) {
+        if (!this.ensureStaffAccess(interaction, "publicar o painel de um produto")) {
+            return;
+        }
+        const subcommand = interaction.options.getSubcommand();
+        if (subcommand !== "produto") {
+            await this.replyEphemeral(interaction, "Subcomando ainda nao tratado.");
+            return;
+        }
+        const search = String(interaction.options.getString("produto", true) ?? "").trim();
+        const product = this.findProductBySearch(search);
+        if (!product) {
+            await this.replyEphemeral(interaction, `Nao encontrei produto com o nome/slug \`${search}\`.`);
+            return;
+        }
+        const targetChannel = interaction.options.getChannel("canal") ?? interaction.channel;
+        if (!targetChannel || !targetChannel.isTextBased?.()) {
+            await this.replyEphemeral(interaction, "Escolha um canal de texto valido para publicar o painel.");
+            return;
+        }
+        const result = await this.publishOrUpdateSalesPanel(product, targetChannel);
+        await this.replyEphemeral(interaction, `Painel de vendas de **${product.name}** ${result.action === "updated" ? "atualizado" : "publicado"} em ${targetChannel.toString()}.`);
     }
     async handleViewSubscribersCommand(interaction) {
         if (!this.ensureStaffAccess(interaction, "ver assinantes")) {
@@ -819,10 +2373,51 @@ class ManagerBotService {
     }
     async handleSalesBuyButton(interaction) {
         const productSlug = String(interaction.customId.split(":").slice(3).join(":") || "").trim();
-        const product = this.dependencies.catalogService.getProductBySlug(productSlug) ?? this.getPrimaryProduct();
+        const product = this.getResolvedProductBySlug(productSlug) ?? this.getPrimaryProduct();
         if (!product) {
             await this.replyEphemeral(interaction, "Nenhum produto foi cadastrado no catalogo do manager.");
             return;
+        }
+        if (interaction.guild) {
+            const sales = this.dependencies.managerRuntimeConfigService.getResolvedSalesSettings();
+            if (sales.cartCategoryId) {
+                await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
+                try {
+                    const { channel, created } = await this.createOrReuseCartChannel(interaction.guild, interaction.user, product);
+                    const state = await this.persistCartState(channel, interaction.user, product, { step: "plan" });
+                    await this.upsertCartPanelMessage(channel, interaction.user, product);
+                    await this.logSalesEvent({
+                        type: created ? "cart_opened" : "cart_reopened",
+                        userId: interaction.user.id,
+                        channelId: String(channel.id ?? "").trim() || null,
+                        productName: product.name,
+                        planName: this.getCartSelectedPlan(product, state)?.name ?? null,
+                        amountCents: this.calculateCartTotalCents(product, state),
+                        currency: this.getCartSelectedPlan(product, state)?.currency ?? "BRL",
+                        addons: this.getSelectedAddonLogEntries(product, state),
+                        note: created
+                            ? "Carrinho privado criado pelo painel de vendas."
+                            : "Carrinho privado reutilizado para continuar a compra.",
+                    });
+                    await interaction.editReply({
+                        content: created
+                            ? `Seu carrinho foi aberto com sucesso em ${channel.toString()}. Continue a compra por la.`
+                            : `Seu carrinho ja estava aberto em ${channel.toString()}. Atualizei o painel para voce continuar por la.`,
+                        components: [
+                            new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+                                .setLabel("Abrir Carrinho")
+                                .setEmoji("\uD83D\uDED2")
+                                .setStyle(discord_js_1.ButtonStyle.Link)
+                                .setURL(`https://discord.com/channels/${interaction.guild.id}/${channel.id}`)),
+                        ],
+                    });
+                    return;
+                }
+                catch (error) {
+                    await interaction.editReply(this.limitMessageSize(`Nao consegui abrir seu carrinho agora: ${error.message}`)).catch(() => null);
+                    return;
+                }
+            }
         }
         const options = product.plans.slice(0, 25).map((plan) => ({
             label: `${plan.name} - ${this.formatCurrency(plan.priceCents, plan.currency)}`.slice(0, 100),
@@ -843,7 +2438,7 @@ class ManagerBotService {
     }
     async handleBuyPlanSelection(interaction) {
         const [productSlug, planCode] = String(interaction.values[0] ?? "").split("|");
-        const product = this.dependencies.catalogService.getProductBySlug(productSlug) ?? this.getPrimaryProduct();
+        const product = this.getResolvedProductBySlug(productSlug) ?? this.getPrimaryProduct();
         if (!product) {
             await this.replyEphemeral(interaction, "Nenhum produto esta disponivel no manager.");
             return;
@@ -861,11 +2456,11 @@ class ManagerBotService {
             const plan = product.plans.find((item) => item.code === planCode) ?? null;
             await interaction.editReply(this.buildPixCheckoutResponse({
                 title: "Pix da assinatura criado",
-                intro: "Seu checkout foi gerado. Quando o Pix compensar, use `/apps` para acompanhar a liberacao.",
+                intro: "Escaneie o QR Code abaixo ou use o botao de Pix copia e cola. O pagamento sera validado automaticamente.",
                 checkout,
                 productName: product.name,
                 planName: plan?.name ?? planCode,
-                setupHint: "Como esse produto usa `customer_token`, depois da aprovacao voce vai finalizar tudo em `/apps` > configurar bot.",
+                setupHint: "Depois da aprovacao, va para <#1491695938622853251> e use `/apps` > configurar bot para finalizar sua aplicacao.",
             }));
         }
         catch (error) {
@@ -883,7 +2478,7 @@ class ManagerBotService {
         await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
         try {
             const bundle = this.dependencies.subscriptionService.getRequiredBundle(subscriptionId);
-            if (bundle.customer?.discordUserId !== interaction.user.id) {
+            if (!this.canManageSubscription(interaction.user.id, bundle.subscription)) {
                 await interaction.editReply("Essa assinatura nao pertence a voce.");
                 return;
             }
@@ -891,7 +2486,7 @@ class ManagerBotService {
             await this.persistStoreIfNeeded();
             await interaction.editReply(this.buildPixCheckoutResponse({
                 title: "Pix de renovacao criado",
-                intro: "Sua renovacao foi gerada com sucesso.",
+                intro: "Escaneie o QR Code abaixo ou use o botao de Pix copia e cola. O pagamento sera validado automaticamente.",
                 checkout,
                 productName: bundle.product?.name ?? "Produto",
                 planName: bundle.plan?.name ?? "Plano",
@@ -905,7 +2500,7 @@ class ManagerBotService {
     async handleSetupSelection(interaction) {
         const subscriptionId = interaction.values[0];
         const bundle = this.dependencies.subscriptionService.getRequiredBundle(subscriptionId);
-        if (bundle.customer?.discordUserId !== interaction.user.id) {
+        if (!this.canManageSubscription(interaction.user.id, bundle.subscription)) {
             await this.replyEphemeral(interaction, "Essa assinatura nao pertence a voce.");
             return;
         }
@@ -917,7 +2512,7 @@ class ManagerBotService {
         try {
             this.dependencies.purchaseSetupService.resetSetupSession(payment.id);
             await this.persistStoreIfNeeded();
-            await interaction.showModal(this.buildBotSetupModal(payment.id, bundle));
+            await interaction.showModal(this.buildBotSetupModal(payment.id, bundle, payment));
         }
         catch (error) {
             await this.replyEphemeral(interaction, `Nao consegui abrir o setup agora: ${error.message}`);
@@ -956,20 +2551,87 @@ class ManagerBotService {
                     ? validation.message
                     : `Validacao automatica falhou: ${validation.message}`,
         ];
-        await interaction.editReply({
-            content: lines.join("\n"),
-            embeds: [this.buildAdminPanelEmbed()],
-            components: this.buildAdminPanelComponents(),
-        });
+        const payload = this.buildEfipayManagementPayload(lines.join("\n"));
+        const updated = await this.tryUpdateTrackedAdminPanel(interaction.user.id, payload);
+        if (updated) {
+            await interaction.deleteReply().catch(() => null);
+            return;
+        }
+        await interaction.editReply(payload);
+    }
+    async handleEfipayUploadModal(interaction) {
+        if (!this.ensureAdminAccess(interaction, "enviar o certificado da Efi")) {
+            return;
+        }
+        await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
+        try {
+            const uploadedFiles = interaction.fields.getUploadedFiles("efi_cert_p12_upload", true);
+            const p12Attachment = [...uploadedFiles.values()].find((item) => isValidP12Attachment(item));
+            if (!p12Attachment) {
+                throw new Error("Envie um certificado .p12 valido.");
+            }
+            if (Number(p12Attachment.size ?? 0) > MAX_P12_BYTES) {
+                throw new Error("O arquivo .p12 deve ter no maximo 10MB.");
+            }
+            const certPassphrase = String(interaction.fields.getTextInputValue("efi_cert_p12_passphrase") ?? "").trim();
+            const payload = await this.downloadAttachmentBase64(p12Attachment.url);
+            if (!payload.base64 || payload.size <= 0) {
+                throw new Error("Arquivo recebido esta vazio.");
+            }
+            const currentEfipay = this.dependencies.managerRuntimeConfigService.getResolvedEfipayOptions();
+            const inferredSandbox = inferEfiSandboxFromCertName(`${p12Attachment.name ?? ""}`, Boolean(currentEfipay.sandbox));
+            const nextConfig = {
+                certP12Base64: payload.base64,
+                certFileName: p12Attachment.name ?? "efipay-cert.p12",
+                sandbox: inferredSandbox,
+            };
+            if (certPassphrase) {
+                nextConfig.certP12Passphrase = certPassphrase;
+            }
+            this.dependencies.managerRuntimeConfigService.updateRuntimeConfig(nextConfig);
+            const validation = await this.tryAutoValidateEfipay();
+            await this.persistStoreIfNeeded();
+            const statusMessage = validation.ok
+                ? `Certificado \`.p12\` salvo com sucesso. Ambiente detectado: **${inferredSandbox ? "SANDBOX" : "PRODUCAO"}**. Webhook sincronizado automaticamente.`
+                : validation.skipped
+                    ? `Certificado \`.p12\` salvo com sucesso. Ambiente detectado: **${inferredSandbox ? "SANDBOX" : "PRODUCAO"}**. ${validation.message}`
+                    : `Certificado \`.p12\` salvo, mas a validacao automatica falhou: ${validation.message}`;
+            const panelPayload = this.buildEfipayManagementPayload(statusMessage);
+            const updated = await this.tryUpdateTrackedAdminPanel(interaction.user.id, panelPayload);
+            if (updated) {
+                await interaction.deleteReply().catch(() => null);
+                return;
+            }
+            await interaction.editReply(panelPayload);
+        }
+        catch (error) {
+            await this.persistStoreIfNeeded();
+            const reason = error instanceof Error ? error.message : String(error);
+            const panelPayload = this.buildEfipayManagementPayload(`Falha ao importar o certificado \`.p12\`: ${reason}`);
+            const updated = await this.tryUpdateTrackedAdminPanel(interaction.user.id, panelPayload);
+            if (updated) {
+                await interaction.deleteReply().catch(() => null);
+                return;
+            }
+            await interaction.editReply(panelPayload);
+        }
     }
     async handleBotSetupModal(interaction) {
         const paymentId = interaction.customId.slice(MODAL_IDS.botSetupPrefix.length);
         await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
         try {
+            let customBioText = "";
+            try {
+                customBioText = interaction.fields.getTextInputValue("setup_custom_bio_text");
+            }
+            catch {
+                customBioText = "";
+            }
             const result = await this.dependencies.purchaseSetupService.submitBotForProvisioning(paymentId, {
                 applicationName: interaction.fields.getTextInputValue("setup_application_name"),
                 botToken: interaction.fields.getTextInputValue("setup_bot_token"),
                 ownerDiscordUserId: interaction.fields.getTextInputValue("setup_owner_discord_user_id"),
+                customBioText,
             });
             await this.persistStoreIfNeeded();
             const lines = [
@@ -979,41 +2641,522 @@ class ManagerBotService {
                 result.instance?.hostingAppId ? `SquareCloud App: ${result.instance.hostingAppId}` : null,
                 result.application?.inviteUrl ? `Install URL: ${result.application.inviteUrl}` : null,
             ].filter(Boolean);
+            const payload = await this.buildAppsPanelPayload(interaction.user.id, 0, result.instance?.id ? `inst_${result.instance.id}` : null, "overview", "Bot enviado para provisionamento com sucesso.");
+            const updated = await this.tryUpdateTrackedAppsPanel(interaction.user.id, payload);
+            if (updated) {
+                await interaction.deleteReply().catch(() => null);
+                return;
+            }
             await interaction.editReply(lines.join("\n"));
         }
         catch (error) {
+            const payload = await this.buildAppsPanelPayload(interaction.user.id, 0, null, "overview", `Nao consegui provisionar seu bot agora: ${error.message}`);
+            const updated = await this.tryUpdateTrackedAppsPanel(interaction.user.id, payload);
+            if (updated) {
+                await interaction.deleteReply().catch(() => null);
+                return;
+            }
             await interaction.editReply(`Nao consegui provisionar seu bot agora: ${error.message}`);
+        }
+    }
+    async handleAppsSelection(interaction) {
+        const payload = String(interaction.customId.slice(CUSTOM_IDS.appsSelectPrefix.length) ?? "").trim();
+        const [pageRaw, viewRaw] = payload.split(":");
+        const selectedKey = String(interaction.values?.[0] ?? "").trim();
+        const page = Math.max(0, Number(pageRaw ?? 0) || 0);
+        this.rememberAppsPanelInteraction(interaction);
+        await interaction.deferUpdate();
+        await interaction.editReply(await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, viewRaw === "settings" ? "settings" : "overview")).catch(() => null);
+    }
+    async handleAppsPageButton(interaction) {
+        const payload = String(interaction.customId.slice(CUSTOM_IDS.appsPagePrefix.length) ?? "").trim();
+        const [pageRaw, selectedKeyRaw, viewRaw] = payload.split(":");
+        const page = Math.max(0, Number(pageRaw ?? 0) || 0);
+        const selectedKey = String(selectedKeyRaw ?? "").trim();
+        this.rememberAppsPanelInteraction(interaction);
+        await interaction.deferUpdate();
+        await interaction.editReply(await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, viewRaw === "settings" ? "settings" : "overview")).catch(() => null);
+    }
+    async handleAppsViewButton(interaction) {
+        const payload = String(interaction.customId.slice(CUSTOM_IDS.appsViewPrefix.length) ?? "").trim();
+        const [viewRaw, pageRaw, selectedKeyRaw] = payload.split(":");
+        const page = Math.max(0, Number(pageRaw ?? 0) || 0);
+        const selectedKey = String(selectedKeyRaw ?? "").trim();
+        this.rememberAppsPanelInteraction(interaction);
+        await interaction.deferUpdate();
+        await interaction.editReply(await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, viewRaw === "settings" ? "settings" : "overview")).catch(() => null);
+    }
+    async handleAppsPowerButton(interaction) {
+        const payload = String(interaction.customId.slice(CUSTOM_IDS.appsPowerPrefix.length) ?? "").trim();
+        const [action, pageRaw, selectedKeyRaw] = payload.split(":");
+        const page = Math.max(0, Number(pageRaw ?? 0) || 0);
+        const selectedKey = String(selectedKeyRaw ?? "").trim();
+        const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
+        if (!entry?.instance) {
+            await this.replyEphemeral(interaction, "Nao encontrei a aplicacao selecionada para executar essa acao.");
+            return;
+        }
+        if (!this.canUpdateInstance(interaction.user.id, entry.instance)) {
+            await this.replyEphemeral(interaction, "Voce nao pode controlar essa aplicacao.");
+            return;
+        }
+        this.rememberAppsPanelInteraction(interaction);
+        await interaction.deferUpdate();
+        try {
+            if (action === "start") {
+                if (this.dependencies.squareCloudClient?.isConfigured?.() && !String(entry.instance.hostingAppId ?? "").startsWith("pending-")) {
+                    await this.dependencies.squareCloudClient.startApp(entry.instance.hostingAppId);
+                }
+                entry.instance.status = "running";
+            }
+            else if (action === "stop") {
+                if (this.dependencies.squareCloudClient?.isConfigured?.() && !String(entry.instance.hostingAppId ?? "").startsWith("pending-")) {
+                    await this.dependencies.squareCloudClient.stopApp(entry.instance.hostingAppId);
+                }
+                entry.instance.status = "suspended";
+            }
+            else if (action === "restart") {
+                if (this.dependencies.squareCloudClient?.isConfigured?.() && !String(entry.instance.hostingAppId ?? "").startsWith("pending-")) {
+                    await this.dependencies.squareCloudClient.restartApp(entry.instance.hostingAppId);
+                }
+                entry.instance.status = "running";
+            }
+            entry.instance.updatedAt = new Date().toISOString();
+            await this.persistStoreIfNeeded();
+            const actionLabels = {
+                start: "Aplicacao ligada com sucesso.",
+                stop: "Aplicacao desligada com sucesso.",
+                restart: "Aplicacao reiniciada com sucesso.",
+            };
+            const successPayload = await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "overview", actionLabels[action] ?? "Aplicacao atualizada.");
+            const updated = await this.tryUpdateTrackedAppsPanel(interaction.user.id, successPayload);
+            if (!updated) {
+                await interaction.editReply(successPayload).catch(() => null);
+            }
+        }
+        catch (error) {
+            const failurePayload = await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "overview", `Falha ao executar essa acao: ${error?.message ?? "erro desconhecido"}`);
+            const updated = await this.tryUpdateTrackedAppsPanel(interaction.user.id, failurePayload);
+            if (!updated) {
+                await interaction.editReply(failurePayload).catch(() => null);
+            }
+        }
+    }
+    async handleAppsSetupButton(interaction) {
+        const payload = String(interaction.customId.slice(CUSTOM_IDS.appsSetupButtonPrefix.length) ?? "").trim();
+        const [_pageRaw, selectedKeyRaw] = payload.split(":");
+        const selectedKey = String(selectedKeyRaw ?? "").trim();
+        const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
+        if (!entry?.bundle) {
+            await this.replyEphemeral(interaction, "Nao encontrei a assinatura selecionada.");
+            return;
+        }
+        if (!this.canManageSubscription(interaction.user.id, entry.bundle.subscription)) {
+            await this.replyEphemeral(interaction, "Essa assinatura nao pertence a voce.");
+            return;
+        }
+        const payment = this.findApprovedActivationPayment(entry.bundle.subscription.id);
+        if (!payment) {
+            await this.replyEphemeral(interaction, "Nao achei um pagamento de ativacao aprovado para essa assinatura.");
+            return;
+        }
+        this.rememberAppsPanelInteraction(interaction);
+        try {
+            this.dependencies.purchaseSetupService.resetSetupSession(payment.id);
+            await this.persistStoreIfNeeded();
+            await interaction.showModal(this.buildBotSetupModal(payment.id, entry.bundle, payment));
+        }
+        catch (error) {
+            await this.replyEphemeral(interaction, `Nao consegui abrir o setup agora: ${error.message}`);
+        }
+    }
+    async handleAppsRenameButton(interaction) {
+        const payload = String(interaction.customId.slice(CUSTOM_IDS.appsRenamePrefix.length) ?? "").trim();
+        const [pageRaw, selectedKeyRaw] = payload.split(":");
+        const page = Math.max(0, Number(pageRaw ?? 0) || 0);
+        const selectedKey = String(selectedKeyRaw ?? "").trim();
+        const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
+        if (!entry?.instance || !entry.discordApp) {
+            await this.replyEphemeral(interaction, "Nao encontrei a aplicacao selecionada para renomear.");
+            return;
+        }
+        this.rememberAppsPanelInteraction(interaction);
+        await interaction.showModal(this.buildAppsRenameModal(page, entry));
+    }
+    async handleAppsTokenButton(interaction) {
+        const payload = String(interaction.customId.slice(CUSTOM_IDS.appsTokenPrefix.length) ?? "").trim();
+        const [pageRaw, selectedKeyRaw] = payload.split(":");
+        const page = Math.max(0, Number(pageRaw ?? 0) || 0);
+        const selectedKey = String(selectedKeyRaw ?? "").trim();
+        const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
+        if (!entry?.instance || !entry.discordApp) {
+            await this.replyEphemeral(interaction, "Nao encontrei a aplicacao selecionada para trocar o token.");
+            return;
+        }
+        this.rememberAppsPanelInteraction(interaction);
+        await interaction.showModal(this.buildAppsTokenModal(page, entry));
+    }
+    async handleAppsOwnerButton(interaction) {
+        const payload = String(interaction.customId.slice(CUSTOM_IDS.appsOwnerPrefix.length) ?? "").trim();
+        const [pageRaw, selectedKeyRaw] = payload.split(":");
+        const page = Math.max(0, Number(pageRaw ?? 0) || 0);
+        const selectedKey = String(selectedKeyRaw ?? "").trim();
+        const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
+        if (!entry?.instance || !entry.discordApp) {
+            await this.replyEphemeral(interaction, "Nao encontrei a aplicacao selecionada para trocar o dono do bot.");
+            return;
+        }
+        this.rememberAppsPanelInteraction(interaction);
+        await interaction.showModal(this.buildAppsOwnerModal(page, entry));
+    }
+    async handleAppsTransferButton(interaction) {
+        const payload = String(interaction.customId.slice(CUSTOM_IDS.appsTransferPrefix.length) ?? "").trim();
+        const [pageRaw, selectedKeyRaw] = payload.split(":");
+        const page = Math.max(0, Number(pageRaw ?? 0) || 0);
+        const selectedKey = String(selectedKeyRaw ?? "").trim();
+        const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
+        if (!entry?.bundle) {
+            await this.replyEphemeral(interaction, "Nao encontrei a aplicacao selecionada para transferir.");
+            return;
+        }
+        this.rememberAppsPanelInteraction(interaction);
+        await interaction.showModal(this.buildAppsTransferModal(page, entry));
+    }
+    async handleAppsDeleteButton(interaction) {
+        const payload = String(interaction.customId.slice(CUSTOM_IDS.appsDeletePrefix.length) ?? "").trim();
+        const [pageRaw, selectedKeyRaw] = payload.split(":");
+        const page = Math.max(0, Number(pageRaw ?? 0) || 0);
+        const selectedKey = String(selectedKeyRaw ?? "").trim();
+        const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
+        if (!entry?.instance) {
+            await this.replyEphemeral(interaction, "Nao encontrei a aplicacao selecionada para deletar.");
+            return;
+        }
+        this.rememberAppsPanelInteraction(interaction);
+        await interaction.showModal(this.buildAppsDeleteModal(page, entry));
+    }
+    async handleAppsRenameModal(interaction) {
+        const payload = String(interaction.customId.slice(MODAL_IDS.appRenamePrefix.length) ?? "").trim();
+        const [pageRaw, selectedKeyRaw] = payload.split(":");
+        const page = Math.max(0, Number(pageRaw ?? 0) || 0);
+        const selectedKey = String(selectedKeyRaw ?? "").trim();
+        await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
+        try {
+            const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
+            if (!entry?.instance || !entry.discordApp) {
+                throw new Error("Aplicacao nao encontrada.");
+            }
+            const desiredName = String(interaction.fields.getTextInputValue("apps_rename_name") ?? "").trim();
+            if (!desiredName) {
+                throw new Error("Informe o novo nome da aplicacao.");
+            }
+            await this.dependencies.discordBotClient.updateBotUsername(entry.discordApp.botToken, desiredName);
+            const inspection = await this.dependencies.discordBotClient.inspectBotToken(entry.discordApp.botToken);
+            entry.discordApp.appName = String(inspection.botUsername || inspection.applicationName || desiredName).trim();
+            entry.discordApp.applicationId = String(inspection.applicationId ?? entry.discordApp.applicationId).trim();
+            entry.discordApp.clientId = String(inspection.clientId ?? entry.discordApp.clientId).trim();
+            entry.instance.installUrl = String(inspection.inviteUrl ?? entry.instance.installUrl ?? "").trim() || entry.instance.installUrl;
+            entry.instance.config.discordAppName = entry.discordApp.appName;
+            entry.instance.config.discordApplicationId = entry.discordApp.applicationId;
+            entry.instance.config.discordClientId = entry.discordApp.clientId;
+            entry.instance.updatedAt = new Date().toISOString();
+            await this.syncManagedInstanceRuntime(entry.instance, entry.discordApp);
+            await this.persistStoreIfNeeded();
+            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "settings", "Nome da aplicacao atualizado com sucesso."));
+        }
+        catch (error) {
+            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "settings", `Falha ao alterar o nome da aplicacao: ${error?.message ?? "erro desconhecido"}`));
+        }
+    }
+    async handleAppsTokenModal(interaction) {
+        const payload = String(interaction.customId.slice(MODAL_IDS.appTokenPrefix.length) ?? "").trim();
+        const [pageRaw, selectedKeyRaw] = payload.split(":");
+        const page = Math.max(0, Number(pageRaw ?? 0) || 0);
+        const selectedKey = String(selectedKeyRaw ?? "").trim();
+        await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
+        try {
+            const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
+            if (!entry?.instance || !entry.discordApp) {
+                throw new Error("Aplicacao nao encontrada.");
+            }
+            const nextToken = String(interaction.fields.getTextInputValue("apps_token_value") ?? "").trim();
+            if (!nextToken) {
+                throw new Error("Informe o novo token do bot.");
+            }
+            const inspection = await this.dependencies.discordBotClient.inspectBotToken(nextToken);
+            entry.discordApp.botToken = nextToken;
+            entry.discordApp.applicationId = String(inspection.applicationId ?? entry.discordApp.applicationId).trim();
+            entry.discordApp.clientId = String(inspection.clientId ?? entry.discordApp.clientId).trim();
+            entry.discordApp.appName = String(inspection.botUsername || inspection.applicationName || entry.discordApp.appName).trim();
+            entry.instance.installUrl = String(inspection.inviteUrl ?? entry.instance.installUrl ?? "").trim() || entry.instance.installUrl;
+            entry.instance.config.discordAppName = entry.discordApp.appName;
+            entry.instance.config.discordApplicationId = entry.discordApp.applicationId;
+            entry.instance.config.discordClientId = entry.discordApp.clientId;
+            entry.instance.updatedAt = new Date().toISOString();
+            await this.syncManagedInstanceRuntime(entry.instance, entry.discordApp);
+            await this.persistStoreIfNeeded();
+            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "settings", "Token da aplicacao atualizado com sucesso."));
+        }
+        catch (error) {
+            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "settings", `Falha ao alterar o token da aplicacao: ${error?.message ?? "erro desconhecido"}`));
+        }
+    }
+    async handleAppsOwnerModal(interaction) {
+        const payload = String(interaction.customId.slice(MODAL_IDS.appOwnerPrefix.length) ?? "").trim();
+        const [pageRaw, selectedKeyRaw] = payload.split(":");
+        const page = Math.max(0, Number(pageRaw ?? 0) || 0);
+        const selectedKey = String(selectedKeyRaw ?? "").trim();
+        await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
+        try {
+            const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
+            if (!entry?.instance || !entry.discordApp) {
+                throw new Error("Aplicacao nao encontrada.");
+            }
+            const nextOwnerDiscordUserId = String(interaction.fields.getTextInputValue("apps_owner_user_id") ?? "").trim();
+            if (!/^\d{5,32}$/u.test(nextOwnerDiscordUserId)) {
+                throw new Error("Informe um Discord User ID valido.");
+            }
+            entry.instance.config.ownerDiscordUserId = nextOwnerDiscordUserId;
+            entry.discordApp.runtimeEnv = {
+                ...(entry.discordApp.runtimeEnv ?? {}),
+                CUSTOMER_OWNER_DISCORD_USER_ID: nextOwnerDiscordUserId,
+            };
+            entry.instance.updatedAt = new Date().toISOString();
+            await this.syncManagedInstanceRuntime(entry.instance, entry.discordApp);
+            await this.persistStoreIfNeeded();
+            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "settings", "Dono do bot atualizado com sucesso."));
+        }
+        catch (error) {
+            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "settings", `Falha ao alterar o dono do bot: ${error?.message ?? "erro desconhecido"}`));
+        }
+    }
+    async handleAppsTransferModal(interaction) {
+        const payload = String(interaction.customId.slice(MODAL_IDS.appTransferPrefix.length) ?? "").trim();
+        const [pageRaw, selectedKeyRaw] = payload.split(":");
+        const page = Math.max(0, Number(pageRaw ?? 0) || 0);
+        const selectedKey = String(selectedKeyRaw ?? "").trim();
+        await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
+        try {
+            const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
+            if (!entry?.bundle?.subscription) {
+                throw new Error("Aplicacao nao encontrada.");
+            }
+            const nextCommercialOwnerDiscordUserId = String(interaction.fields.getTextInputValue("apps_transfer_user_id") ?? "").trim();
+            if (!/^\d{5,32}$/u.test(nextCommercialOwnerDiscordUserId)) {
+                throw new Error("Informe um Discord User ID valido.");
+            }
+            if (nextCommercialOwnerDiscordUserId === String(entry.bundle.subscription.commercialOwnerDiscordUserId ?? "").trim()) {
+                throw new Error("Essa aplicacao ja pertence a esse usuario.");
+            }
+            entry.bundle.subscription.commercialOwnerDiscordUserId = nextCommercialOwnerDiscordUserId;
+            entry.bundle.subscription.updatedAt = new Date().toISOString();
+            await this.persistStoreIfNeeded();
+            if (interaction.guild) {
+                await this.tryGrantCustomerRole(interaction.guild, nextCommercialOwnerDiscordUserId).catch(() => null);
+            }
+            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, null, "overview", `Posse da aplicacao transferida para <@${nextCommercialOwnerDiscordUserId}>. Ela nao aparecera mais no seu /apps.`));
+        }
+        catch (error) {
+            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "settings", `Falha ao transferir a posse da aplicacao: ${error?.message ?? "erro desconhecido"}`));
+        }
+    }
+    async handleAppsDeleteModal(interaction) {
+        const payload = String(interaction.customId.slice(MODAL_IDS.appDeletePrefix.length) ?? "").trim();
+        const [pageRaw, selectedKeyRaw] = payload.split(":");
+        const page = Math.max(0, Number(pageRaw ?? 0) || 0);
+        const selectedKey = String(selectedKeyRaw ?? "").trim();
+        await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
+        try {
+            const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
+            if (!entry?.instance || !entry.bundle?.subscription) {
+                throw new Error("Aplicacao nao encontrada.");
+            }
+            const confirmation = normalizeTextForMatch(interaction.fields.getTextInputValue("apps_delete_confirm"));
+            const acceptedValues = new Set([
+                "deletar",
+                "delete",
+                normalizeTextForMatch(entry.instance.id),
+                normalizeTextForMatch(entry.instance.hostingAppId),
+            ]);
+            if (!acceptedValues.has(confirmation)) {
+                throw new Error("Confirmacao invalida. Digite DELETAR ou o ID da aplicacao.");
+            }
+            await this.dependencies.instanceService.deleteBySubscription(entry.bundle.subscription.id);
+            entry.bundle.subscription.status = "deleted";
+            entry.bundle.subscription.updatedAt = new Date().toISOString();
+            await this.persistStoreIfNeeded();
+            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, null, "overview", "Aplicacao deletada com sucesso."));
+        }
+        catch (error) {
+            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "settings", `Falha ao deletar a aplicacao: ${error?.message ?? "erro desconhecido"}`));
         }
     }
     buildSalesPanelMessage(product = null) {
         const resolvedProduct = product ?? this.getPrimaryProduct();
+        const buttonLabel = String(resolvedProduct?.panelConfig?.buttonLabel ?? "").trim() || "Adicionar ao Carrinho";
+        const previewUrl = String(resolvedProduct?.panelConfig?.previewUrl ?? "").trim();
+        const row = new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+            .setCustomId(`${CUSTOM_IDS.salesBuy}:${resolvedProduct?.slug ?? "default"}`)
+            .setLabel(buttonLabel)
+            .setEmoji("\uD83D\uDED2")
+            .setStyle(discord_js_1.ButtonStyle.Success));
+        if (isLikelyHttpUrl(previewUrl)) {
+            row.addComponents(new discord_js_1.ButtonBuilder()
+                .setLabel("Preview")
+                .setEmoji("\uD83C\uDFAC")
+                .setStyle(discord_js_1.ButtonStyle.Link)
+                .setURL(previewUrl));
+        }
         return {
             embeds: [this.buildSalesPanelEmbed(resolvedProduct)],
-            components: [
-                new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
-                    .setCustomId(`${CUSTOM_IDS.salesBuy}:${resolvedProduct?.slug ?? "default"}`)
-                    .setLabel("Comprar assinatura")
-                    .setStyle(discord_js_1.ButtonStyle.Success)),
-            ],
+            components: [row],
         };
+    }
+    async findExistingSalesPanelMessage(channel, product) {
+        if (!channel?.isTextBased?.() || typeof channel.messages?.fetch !== "function") {
+            return null;
+        }
+        const botUserId = this.client?.user?.id;
+        const expectedCustomId = `${CUSTOM_IDS.salesBuy}:${product?.slug ?? ""}`;
+        if (!expectedCustomId || !botUserId) {
+            return null;
+        }
+        const recentMessages = await channel.messages.fetch({ limit: 25 }).catch(() => null);
+        return recentMessages?.find((message) => message.author?.id === botUserId &&
+            message.components?.some((row) => row.components?.some((component) => String(component.customId ?? "") === expectedCustomId))) ?? null;
+    }
+    async publishOrUpdateSalesPanel(product, targetChannel = null) {
+        const resolvedProduct = this.getResolvedProductBySlug(product?.slug) ?? product;
+        if (!resolvedProduct) {
+            throw new Error("Produto nao encontrado para publicar/atualizar o painel.");
+        }
+        const panelConfig = resolvedProduct.panelConfig ?? {};
+        const storedChannelId = String(panelConfig.publishedChannelId ?? "").trim();
+        const storedMessageId = String(panelConfig.publishedMessageId ?? "").trim();
+        const existingChannel = storedChannelId && this.client
+            ? await this.client.channels.fetch(storedChannelId).catch(() => null)
+            : null;
+        const existingMessage = storedMessageId &&
+            existingChannel?.isTextBased?.() &&
+            typeof existingChannel.messages?.fetch === "function"
+            ? await existingChannel.messages.fetch(storedMessageId).catch(() => null)
+            : null;
+        if (!targetChannel && existingMessage) {
+            await existingMessage.edit(this.buildSalesPanelMessage(resolvedProduct));
+            return {
+                action: "updated",
+                channel: existingChannel,
+                message: existingMessage,
+            };
+        }
+        if (targetChannel && existingMessage && existingChannel?.id === targetChannel.id) {
+            await existingMessage.edit(this.buildSalesPanelMessage(resolvedProduct));
+            return {
+                action: "updated",
+                channel: existingChannel,
+                message: existingMessage,
+            };
+        }
+        if (targetChannel && existingMessage && existingChannel?.id !== targetChannel.id) {
+            await existingMessage.delete().catch(() => null);
+        }
+        const publishChannel = targetChannel ?? existingChannel;
+        if (!publishChannel || !publishChannel.isTextBased?.()) {
+            if (storedChannelId || storedMessageId) {
+                this.dependencies.catalogService.updateProduct(resolvedProduct.slug, {
+                    panelConfig: {
+                        ...panelConfig,
+                        publishedChannelId: null,
+                        publishedMessageId: null,
+                    },
+                });
+                await this.persistStoreIfNeeded();
+                if (!targetChannel) {
+                    return {
+                        action: "cleared",
+                        channel: null,
+                        message: null,
+                    };
+                }
+            }
+            throw new Error("Canal de texto invalido para publicar/atualizar o painel.");
+        }
+        const adoptableMessage = targetChannel && !existingMessage
+            ? await this.findExistingSalesPanelMessage(publishChannel, resolvedProduct)
+            : null;
+        if (adoptableMessage) {
+            await adoptableMessage.edit(this.buildSalesPanelMessage(resolvedProduct));
+            this.dependencies.catalogService.updateProduct(resolvedProduct.slug, {
+                panelConfig: {
+                    ...panelConfig,
+                    publishedChannelId: String(publishChannel.id ?? "").trim() || null,
+                    publishedMessageId: String(adoptableMessage.id ?? "").trim() || null,
+                },
+            });
+            await this.persistStoreIfNeeded();
+            return {
+                action: "updated",
+                channel: publishChannel,
+                message: adoptableMessage,
+            };
+        }
+        const publishedMessage = await publishChannel.send(this.buildSalesPanelMessage(resolvedProduct));
+        this.dependencies.catalogService.updateProduct(resolvedProduct.slug, {
+            panelConfig: {
+                ...panelConfig,
+                publishedChannelId: String(publishChannel.id ?? "").trim() || null,
+                publishedMessageId: String(publishedMessage.id ?? "").trim() || null,
+            },
+        });
+        await this.persistStoreIfNeeded();
+        return {
+            action: "published",
+            channel: publishChannel,
+            message: publishedMessage,
+        };
+    }
+    async syncPublishedSalesPanel(productSlug) {
+        const product = this.getResolvedProductBySlug(productSlug);
+        const panelConfig = product?.panelConfig ?? {};
+        if (!product || !panelConfig.publishedChannelId || !panelConfig.publishedMessageId) {
+            return false;
+        }
+        await this.publishOrUpdateSalesPanel(product, null);
+        return true;
     }
     buildSalesPanelEmbed(product = null) {
         const resolvedProduct = product ?? this.getPrimaryProduct();
+        const sales = this.dependencies.managerRuntimeConfigService.getResolvedSalesSettings();
+        const panelConfig = resolvedProduct?.panelConfig ?? {};
+        const title = String(panelConfig.title ?? "").trim() || `${resolvedProduct?.name ?? "Bot Manager"} | Assinaturas`;
+        const summary = String(panelConfig.summary ?? "").trim() || resolvedProduct?.description || "Nenhum produto ativo no catalogo.";
+        const details = String(panelConfig.details ?? "").trim();
+        const footerText = String(panelConfig.footerText ?? "").trim();
+        const lowestPlan = resolvedProduct?.plans?.length
+            ? [...resolvedProduct.plans].sort((left, right) => Number(left.priceCents ?? 0) - Number(right.priceCents ?? 0))[0]
+            : null;
         const embed = new discord_js_1.EmbedBuilder()
-            .setColor(0x1f8b4c)
-            .setTitle("Bot Manager Hype | Assinaturas")
-            .setDescription(resolvedProduct
-            ? this.limitMessageSize([
-                `Produto atual: **${resolvedProduct.name}**`,
-                "",
-                "Fluxo:",
-                "1. Clique em comprar assinatura",
-                "2. Escolha o plano",
-                "3. Pague o Pix",
-                "4. Depois acompanhe tudo em `/apps`",
-                "5. Para renovacao futura, use `/renovar`",
-            ].join("\n"))
-            : "Nenhum produto ativo no catalogo.");
+            .setColor(this.resolveProductPanelColor(resolvedProduct, 0x1f8b4c))
+            .setTitle(title)
+            .setDescription(this.limitMessageSize([
+            summary,
+            details || null,
+            "",
+            "Fluxo:",
+            "1. Clique em adicionar ao carrinho",
+            sales.cartCategoryId ? "2. Seu carrinho privado sera aberto automaticamente" : "2. Escolha o plano",
+            sales.cartCategoryId ? "3. Escolha o plano e os adicionais" : "3. Gere e pague o Pix",
+            sales.cartCategoryId ? "4. Gere e pague o Pix dentro do carrinho" : "4. Depois acompanhe tudo em `/apps`",
+            sales.cartCategoryId ? "5. Depois acompanhe tudo em `/apps`" : "5. Para renovacao futura, use `/renovar`",
+            footerText || null,
+        ].filter(Boolean).join("\n")));
+        if (lowestPlan) {
+            embed.addFields({
+                name: String(panelConfig.pricePrefix ?? "").trim() || "Planos a partir de",
+                value: `**${this.formatCurrency(lowestPlan.priceCents, lowestPlan.currency)}**`,
+                inline: false,
+            });
+        }
         if (resolvedProduct?.plans?.length) {
             embed.addFields({
                 name: "Planos",
@@ -1023,7 +3166,150 @@ class ManagerBotService {
                     .slice(0, 1024),
             });
         }
+        if (isLikelyHttpUrl(panelConfig.imageUrl)) {
+            embed.setImage(panelConfig.imageUrl);
+        }
         return embed;
+    }
+    buildCartPanelPayload(product, user, rawState) {
+        const state = this.normalizeCartState(rawState, product);
+        return {
+            embeds: [this.buildCartPanelEmbed(product, user, state)],
+            components: this.buildCartPanelComponents(product, user.id, state),
+        };
+    }
+    async updateCartInteractionMessage(interaction, payload) {
+        const messageId = String(interaction?.message?.id ?? "").trim();
+        const channel = interaction?.channel;
+        if (interaction.deferred && messageId && channel?.messages?.edit) {
+            await channel.messages.edit(messageId, payload);
+            return;
+        }
+        if (!interaction.deferred && !interaction.replied && typeof interaction.update === "function") {
+            await interaction.update(payload);
+            return;
+        }
+        await interaction.editReply(payload);
+    }
+    buildCartPanelEmbed(product, user, rawState) {
+        const state = this.normalizeCartState(rawState, product);
+        const selectedPlan = this.getCartSelectedPlan(product, state);
+        const selectedAddons = this.getCartSelectedAddons(product, state);
+        const totalAmountCents = this.calculateCartTotalCents(product, state);
+        const inactivityMinutes = Math.max(1, Number(this.dependencies.managerRuntimeConfigService.getResolvedSalesSettings().cartInactivityMinutes ?? 5));
+        if (state.step === "addons") {
+            const embed = new discord_js_1.EmbedBuilder()
+                .setColor(this.resolveProductPanelColor(product, 0xf59e0b))
+                .setTitle("MANAGER | Adicionais")
+                .setDescription(this.limitMessageSize([
+                `<@${user.id}> (editado)`,
+                "",
+                "**Resumo da compra**",
+                `${product.name} (${selectedPlan?.durationDays ?? 0} dias) - **${this.formatCurrency(selectedPlan?.priceCents ?? 0)}**`,
+                "",
+                "**Adicionais**",
+                selectedAddons.length > 0
+                    ? selectedAddons
+                        .map((addon) => `\`+ ${addon.name}${addon.priceCents > 0 ? `   +${this.formatCurrency(addon.priceCents)}` : ""}\``)
+                        .join("\n")
+                    : "`+ Nenhum`",
+                "",
+                `Carrinho fecha automaticamente apos **${inactivityMinutes} minuto(s)** sem atividade.`,
+                "",
+                "**Valor a pagar**",
+                `**${this.formatCurrency(totalAmountCents)}**`,
+            ].join("\n")));
+            if (isLikelyHttpUrl(product?.panelConfig?.imageUrl)) {
+                embed.setThumbnail(product.panelConfig.imageUrl);
+            }
+            return embed;
+        }
+        return new discord_js_1.EmbedBuilder()
+            .setColor(this.resolveProductPanelColor(product, 0x2563eb))
+            .setTitle(`${product.name} | Carrinho`)
+            .setDescription(this.limitMessageSize([
+            `👋 | Ola <@${user.id}>`,
+            "• Selecione um plano para seu bot.",
+            `â€¢ O carrinho fecha automaticamente apos ${inactivityMinutes} minuto(s) sem atividade.`,
+        ].join("\n")))
+            .setDescription(this.limitMessageSize([
+            `Ola <@${user.id}>`,
+            "Selecione um plano para seu bot.",
+            `O carrinho fecha automaticamente apos ${inactivityMinutes} minuto(s) sem atividade.`,
+        ].join("\n")))
+            .addFields({
+            name: "Produto",
+            value: product.name,
+            inline: false,
+        }, {
+            name: "Preco",
+            value: this.formatCurrency(selectedPlan?.priceCents ?? 0),
+            inline: true,
+        }, {
+            name: "Duracao",
+            value: `${selectedPlan?.durationDays ?? 0} dias`,
+            inline: true,
+        });
+    }
+    buildCartPanelComponents(product, ownerUserId, rawState) {
+        const state = this.normalizeCartState(rawState, product);
+        const selectedAddons = new Set(state.addonCodes);
+        if (state.step === "addons") {
+            return [
+                new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+                    .setCustomId(`${CUSTOM_IDS.cartAddonBioPrefix}${ownerUserId}:${product.slug}`)
+                    .setLabel("Bio Personalizada")
+                    .setEmoji("\uD83D\uDCDD")
+                    .setStyle(selectedAddons.has("custom-bio") ? discord_js_1.ButtonStyle.Success : discord_js_1.ButtonStyle.Danger), new discord_js_1.ButtonBuilder()
+                    .setCustomId(`${CUSTOM_IDS.cartAddonInfoPrefix}auto-restart:${ownerUserId}:${product.slug}`)
+                    .setLabel("AutoRestart")
+                    .setEmoji("\u26A1")
+                    .setStyle(discord_js_1.ButtonStyle.Primary), new discord_js_1.ButtonBuilder()
+                    .setCustomId(`${CUSTOM_IDS.cartAddonInfoPrefix}custom-qr:${ownerUserId}:${product.slug}`)
+                    .setLabel("QrCode Personalizado")
+                    .setEmoji("\uD83D\uDDBC\uFE0F")
+                    .setStyle(discord_js_1.ButtonStyle.Primary), new discord_js_1.ButtonBuilder()
+                    .setCustomId(`${CUSTOM_IDS.cartAddonInfoPrefix}priority-support:${ownerUserId}:${product.slug}`)
+                    .setLabel("Suporte Prioritario")
+                    .setEmoji("\uD83D\uDEE1\uFE0F")
+                    .setStyle(discord_js_1.ButtonStyle.Primary)),
+                new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+                    .setCustomId(`${CUSTOM_IDS.cartPaymentPrefix}${ownerUserId}:${product.slug}`)
+                    .setLabel("Continuar para Pagamento")
+                    .setEmoji("\u2705")
+                    .setStyle(discord_js_1.ButtonStyle.Success), new discord_js_1.ButtonBuilder()
+                    .setCustomId(`${CUSTOM_IDS.cartBackPrefix}${ownerUserId}:${product.slug}`)
+                    .setLabel("Voltar")
+                    .setEmoji("\u2B05\uFE0F")
+                    .setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder()
+                    .setCustomId(`${CUSTOM_IDS.cartCancelPrefix}${ownerUserId}:${product.slug}`)
+                    .setLabel("Cancelar")
+                    .setEmoji("\u274C")
+                    .setStyle(discord_js_1.ButtonStyle.Danger)),
+            ];
+        }
+        const options = product.plans.slice(0, 25).map((plan) => ({
+            label: `${plan.name}`.slice(0, 100),
+            description: `${plan.description} • ${this.formatCurrency(plan.priceCents, plan.currency)}`.slice(0, 100),
+            value: `${product.slug}|${plan.code}`,
+            emoji: { name: plan.code === "weekly" ? "\uD83D\uDDD3\uFE0F" : "\uD83D\uDCC5" },
+            default: plan.code === state.planCode,
+        }));
+        return [
+            new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.StringSelectMenuBuilder()
+                .setCustomId(`${CUSTOM_IDS.buyPlanSelectCartPrefix}${ownerUserId}:${product.slug}`)
+                .setPlaceholder("📅 Escolha o plano")
+                .addOptions(options)),
+            new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+                .setCustomId(`${CUSTOM_IDS.cartContinuePrefix}${ownerUserId}:${product.slug}`)
+                .setLabel("Continuar")
+                .setEmoji("\u2705")
+                .setStyle(discord_js_1.ButtonStyle.Success), new discord_js_1.ButtonBuilder()
+                .setCustomId(`${CUSTOM_IDS.cartCancelPrefix}${ownerUserId}:${product.slug}`)
+                .setLabel("Cancelar")
+                .setEmoji("\u274C")
+                .setStyle(discord_js_1.ButtonStyle.Danger)),
+        ];
     }
     buildAdminPanelEmbed(message) {
         const snapshot = this.dependencies.managerRuntimeConfigService.getAdminSnapshot();
@@ -1032,13 +3318,10 @@ class ManagerBotService {
         const instances = this.dependencies.store.instances;
         const statusCounts = this.countByStatus(subscriptions.map((item) => item.status));
         const instanceCounts = this.countByStatus(instances.map((item) => item.status));
-        const efipay = snapshot.billing.efipay;
         const descriptionLines = [
             message ? `**Atualizacao**\n${message}\n` : null,
             `App Base URL: ${snapshot.appBaseUrl ?? "nao definida"}`,
-            `Efi pronta para Pix: ${efipay.status.canCreatePixCharges ? "sim" : "nao"}`,
-            `Webhook pronto: ${efipay.status.canRegisterWebhook && efipay.status.webhookPublicUrlReady ? "sim" : "nao"}`,
-            efipay.status.lastValidationError ? `Ultimo erro Efi: ${efipay.status.lastValidationError}` : null,
+            "Use os botoes abaixo para abrir as areas de Produtos, Vendas e Efi.",
         ].filter(Boolean);
         return new discord_js_1.EmbedBuilder()
             .setColor(0x0f172a)
@@ -1065,15 +3348,6 @@ class ManagerBotService {
             ].join("\n"),
             inline: true,
         }, {
-            name: "Efi",
-            value: [
-                `Client ID: ${efipay.configuredFields.clientId ? "ok" : "faltando"}`,
-                `Secret: ${efipay.configuredFields.clientSecret ? "ok" : "faltando"}`,
-                `Pix key: ${efipay.configuredFields.pixKey ? "ok" : "faltando"}`,
-                `Certificado: ${efipay.configuredFields.certificate ? "ok" : "faltando"}`,
-            ].join("\n"),
-            inline: true,
-        }, {
             name: "Acesso",
             value: [
                 `Dono(s) da aplicacao: ${this.applicationOwnerUserIds.length}`,
@@ -1082,81 +3356,855 @@ class ManagerBotService {
             inline: true,
         });
     }
-    buildAdminPanelComponents() {
+    buildAdminPanelPayload(message, extraEmbeds = [], components = null) {
+        return {
+            embeds: [this.buildAdminPanelEmbed(message), ...extraEmbeds.filter(Boolean)],
+            components: components ?? this.buildAdminPanelComponents(),
+        };
+    }
+    buildAdminPanelComponents(includeEmojis = true) {
+        const applyEmoji = (button, emoji) => {
+            if (includeEmojis && emoji) {
+                button.setEmoji(emoji);
+            }
+            return button;
+        };
         return [
-            new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+            new discord_js_1.ActionRowBuilder().addComponents(applyEmoji(new discord_js_1.ButtonBuilder()
                 .setCustomId(CUSTOM_IDS.adminRefresh)
                 .setLabel("Atualizar")
-                .setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder()
-                .setCustomId(CUSTOM_IDS.adminSubscribers)
-                .setLabel("Ver Assinantes")
-                .setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder()
-                .setCustomId(CUSTOM_IDS.adminPermissions)
-                .setLabel("Permissoes")
-                .setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder()
-                .setCustomId(CUSTOM_IDS.adminEfipayValidate)
-                .setLabel("Validar Efi")
-                .setStyle(discord_js_1.ButtonStyle.Success), new discord_js_1.ButtonBuilder()
-                .setCustomId(CUSTOM_IDS.adminEfipayWebhook)
-                .setLabel("Sincronizar Webhook")
-                .setStyle(discord_js_1.ButtonStyle.Primary)),
-            new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+                .setStyle(discord_js_1.ButtonStyle.Secondary), "\uD83D\uDD04"), applyEmoji(new discord_js_1.ButtonBuilder()
+                .setCustomId(CUSTOM_IDS.adminProducts)
+                .setLabel("Produtos")
+                .setStyle(discord_js_1.ButtonStyle.Primary), "\uD83D\uDCE6"), applyEmoji(new discord_js_1.ButtonBuilder()
+                .setCustomId(CUSTOM_IDS.adminSales)
+                .setLabel("Configurar Vendas")
+                .setStyle(discord_js_1.ButtonStyle.Primary), "\uD83D\uDED2"), applyEmoji(new discord_js_1.ButtonBuilder()
                 .setCustomId(CUSTOM_IDS.adminEfipayModal)
                 .setLabel("Configurar Efi")
+                .setStyle(discord_js_1.ButtonStyle.Primary), "\uD83D\uDCB3")),
+            new discord_js_1.ActionRowBuilder().addComponents(applyEmoji(new discord_js_1.ButtonBuilder()
+                .setCustomId(CUSTOM_IDS.adminSubscribers)
+                .setLabel("Ver Assinantes")
+                .setStyle(discord_js_1.ButtonStyle.Secondary), "\uD83D\uDC65"), applyEmoji(new discord_js_1.ButtonBuilder()
+                .setCustomId(CUSTOM_IDS.adminPermissions)
+                .setLabel("Permissoes")
+                .setStyle(discord_js_1.ButtonStyle.Secondary), "\uD83D\uDD10")),
+        ];
+    }
+    buildEfipayManagementEmbed(message) {
+        const snapshot = this.dependencies.managerRuntimeConfigService.getAdminSnapshot();
+        const efipay = snapshot.billing.efipay;
+        return new discord_js_1.EmbedBuilder()
+            .setColor(0x1d4ed8)
+            .setTitle("Configurar Efi | Bot Manager")
+            .setDescription(this.limitMessageSize([
+            message ? `**Atualizacao**\n${message}\n` : null,
+            `APP_BASE_URL: ${snapshot.appBaseUrl ?? "nao definida"}`,
+            `Pix pronto: ${efipay.status.canCreatePixCharges ? "sim" : "nao"}`,
+            `Webhook pronto: ${efipay.status.canRegisterWebhook && efipay.status.webhookPublicUrlReady ? "sim" : "nao"}`,
+            efipay.status.lastValidationError ? `Ultimo erro: ${efipay.status.lastValidationError}` : null,
+        ].filter(Boolean).join("\n")))
+            .addFields({
+            name: "Credenciais",
+            value: [
+                `Client ID: ${efipay.configuredFields.clientId ? "ok" : "faltando"}`,
+                `Client Secret: ${efipay.configuredFields.clientSecret ? "ok" : "faltando"}`,
+                `Pix key: ${efipay.configuredFields.pixKey ? "ok" : "faltando"}`,
+                `Certificado: ${efipay.configuredFields.certificate ? "ok" : "faltando"}`,
+            ].join("\n"),
+            inline: true,
+        }, {
+            name: "Webhook",
+            value: [
+                `Path: ${efipay.values.webhookPath ?? "/webhooks/efipay"}`,
+                `Auto sync: ${efipay.values.autoSyncWebhook ? "sim" : "nao"}`,
+                `Ultima validacao: ${efipay.status.lastValidatedAt ? this.formatIsoDate(efipay.status.lastValidatedAt) : "nunca"}`,
+                `Ultimo sync: ${efipay.status.lastWebhookSyncAt ? this.formatIsoDate(efipay.status.lastWebhookSyncAt) : "nunca"}`,
+            ].join("\n"),
+            inline: true,
+        });
+    }
+    buildEfipayManagementPayload(message) {
+        return {
+            embeds: [this.buildEfipayManagementEmbed(message)],
+            components: this.buildEfipayManagementComponents(),
+        };
+    }
+    buildEfipayManagementComponents() {
+        return [
+            new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+                .setCustomId(CUSTOM_IDS.adminEfipayCredentials)
+                .setLabel("Credenciais")
+                .setEmoji("\uD83D\uDD11")
                 .setStyle(discord_js_1.ButtonStyle.Primary), new discord_js_1.ButtonBuilder()
                 .setCustomId(CUSTOM_IDS.adminEfipayUpload)
                 .setLabel("Enviar .p12")
+                .setEmoji("\uD83D\uDCCE")
+                .setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder()
+                .setCustomId(CUSTOM_IDS.adminEfipayValidate)
+                .setLabel("Validar Efi")
+                .setEmoji("\u2705")
+                .setStyle(discord_js_1.ButtonStyle.Success), new discord_js_1.ButtonBuilder()
+                .setCustomId(CUSTOM_IDS.adminEfipayWebhook)
+                .setLabel("Sincronizar Webhook")
+                .setEmoji("\uD83C\uDF10")
+                .setStyle(discord_js_1.ButtonStyle.Primary)),
+            new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+                .setCustomId(CUSTOM_IDS.adminBackHome)
+                .setLabel("Voltar")
+                .setEmoji("\u2B05\uFE0F")
                 .setStyle(discord_js_1.ButtonStyle.Secondary)),
         ];
     }
-    buildAppsEmbed(bundles, _discordUserId) {
-        const lines = bundles.slice(0, 10).flatMap((bundle, index) => {
-            const latestPayment = this.findLatestPayment(bundle.subscription.id);
-            const waitingSetup = !bundle.instance &&
-                bundle.product?.botProvisioningMode === "customer_token" &&
-                bundle.subscription.status === "active";
-            return [
-                `${index + 1}. ${STATUS_EMOJIS[bundle.subscription.status] ?? "-"} **${bundle.product?.name ?? "Produto"}**`,
-                `Assinatura: \`${bundle.subscription.id}\``,
-                `Status: ${this.getStatusLabel(bundle.subscription.status)}${bundle.instance ? ` - App ${this.getStatusLabel(bundle.instance.status)}` : ""}`,
-                bundle.plan ? `Plano: ${bundle.plan.name}` : null,
-                bundle.subscription.currentPeriodEnd
-                    ? `Vence: ${this.formatRelativeTimestamp(bundle.subscription.currentPeriodEnd)}`
-                    : "Vencimento: aguardando ativacao",
-                latestPayment ? `Pagamento mais recente: ${this.getStatusLabel(latestPayment.status)}` : null,
-                waitingSetup ? "Proximo passo: clique no seletor abaixo para configurar o bot com token proprio." : null,
-                bundle.instance?.id ? `Instancia: \`${bundle.instance.id}\`` : null,
-                bundle.instance?.installUrl ? `Install URL: ${bundle.instance.installUrl}` : null,
-                bundle.instance?.hostingAppId ? `SquareCloud App: ${bundle.instance.hostingAppId}` : null,
-                bundle.instance ? `Atualizar: \`/atualizar id:${bundle.instance.id}\`` : null,
-                "",
-            ].filter(Boolean);
+    buildSalesManagementEmbed(message) {
+        const snapshot = this.dependencies.managerRuntimeConfigService.getAdminSnapshot();
+        const sales = snapshot.sales ?? {};
+        return new discord_js_1.EmbedBuilder()
+            .setColor(0x0f766e)
+            .setTitle("Configurar Vendas | Carrinho")
+            .setDescription(this.limitMessageSize([
+            message ? `**Atualizacao**\n${message}\n` : null,
+            "Defina onde os carrinhos privados vao abrir, quem pode ver, para onde os logs vao e em quanto tempo o carrinho fecha sozinho.",
+        ].filter(Boolean).join("\n")))
+            .addFields({
+            name: "Carrinho",
+            value: [
+                `Categoria: ${sales.cartCategoryId ? `<#${sales.cartCategoryId}>` : "nao definida"}`,
+                `Template do canal: ${sales.cartChannelNameTemplate ?? "carrinho-{user}"}`,
+                `Expiracao: ${Math.max(1, Number(sales.cartInactivityMinutes ?? 5))} minuto(s)`,
+            ].join("\n"),
+            inline: true,
+        }, {
+            name: "Cargos",
+            value: [
+                `Cargo do cliente: ${sales.customerRoleId ? `<@&${sales.customerRoleId}>` : "nao definido"}`,
+                `Staff do carrinho: ${Array.isArray(sales.cartStaffRoleIds) && sales.cartStaffRoleIds.length > 0
+                    ? sales.cartStaffRoleIds.map((id) => `<@&${id}>`).join(", ")
+                    : "nenhum"}`,
+            ].join("\n"),
+            inline: true,
+        }, {
+            name: "Logs Privados",
+            value: [
+                `Canal: ${sales.logsChannelId ? `<#${sales.logsChannelId}>` : "nao definido"}`,
+                "Eventos: abertura, reabertura, cancelamento, inatividade, checkout, pagamento e setup",
+            ].join("\n"),
+            inline: false,
         });
+    }
+    buildSalesManagementPayload(message) {
+        return {
+            embeds: [this.buildSalesManagementEmbed(message)],
+            components: this.buildSalesManagementComponents(),
+        };
+    }
+    buildSalesManagementComponents() {
+        return [
+            new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+                .setCustomId(CUSTOM_IDS.adminSalesCartCategory)
+                .setLabel("Categoria do Carrinho")
+                .setEmoji("\uD83D\uDDC2\uFE0F")
+                .setStyle(discord_js_1.ButtonStyle.Primary), new discord_js_1.ButtonBuilder()
+                .setCustomId(CUSTOM_IDS.adminSalesCustomerRole)
+                .setLabel("Cargo do Cliente")
+                .setEmoji("\uD83C\uDF96\uFE0F")
+                .setStyle(discord_js_1.ButtonStyle.Primary), new discord_js_1.ButtonBuilder()
+                .setCustomId(CUSTOM_IDS.adminSalesStaffRoles)
+                .setLabel("Staff do Carrinho")
+                .setEmoji("\uD83D\uDEE1\uFE0F")
+                .setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder()
+                .setCustomId(CUSTOM_IDS.adminSalesTemplate)
+                .setLabel("Nome do Canal")
+                .setEmoji("\u270F\uFE0F")
+                .setStyle(discord_js_1.ButtonStyle.Secondary)),
+            new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+                .setCustomId(CUSTOM_IDS.adminSalesLogsChannel)
+                .setLabel("Canal de Logs")
+                .setEmoji("\uD83D\uDCDC")
+                .setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder()
+                .setCustomId(CUSTOM_IDS.adminSalesInactivity)
+                .setLabel("Expiracao")
+                .setEmoji("\u23F1\uFE0F")
+                .setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder()
+                .setCustomId(CUSTOM_IDS.adminBackHome)
+                .setLabel("Voltar")
+                .setEmoji("\u2B05\uFE0F")
+                .setStyle(discord_js_1.ButtonStyle.Secondary)),
+        ];
+    }
+    buildSalesCategoryPayload(message) {
+        return {
+            embeds: [this.buildSalesManagementEmbed(message ?? "Selecione abaixo a categoria onde os carrinhos privados serao abertos.")],
+            components: [
+                new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ChannelSelectMenuBuilder()
+                    .setCustomId(CUSTOM_IDS.adminSalesCategorySelect)
+                    .setPlaceholder("Selecione a categoria do carrinho")
+                    .setChannelTypes(discord_js_1.ChannelType.GuildCategory)
+                    .setMinValues(1)
+                    .setMaxValues(1)),
+                new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+                    .setCustomId(CUSTOM_IDS.adminSalesCartCategoryClear)
+                    .setLabel("Limpar")
+                    .setEmoji("\uD83E\uDDF9")
+                    .setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder()
+                    .setCustomId(CUSTOM_IDS.adminBackSales)
+                    .setLabel("Voltar")
+                    .setEmoji("\u2B05\uFE0F")
+                    .setStyle(discord_js_1.ButtonStyle.Secondary)),
+            ],
+        };
+    }
+    buildSalesCustomerRolePayload(message) {
+        return {
+            embeds: [this.buildSalesManagementEmbed(message ?? "Selecione o cargo que sera entregue ao cliente com assinatura ativa.")],
+            components: [
+                new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.RoleSelectMenuBuilder()
+                    .setCustomId(CUSTOM_IDS.adminSalesCustomerRoleSelect)
+                    .setPlaceholder("Selecione o cargo do cliente")
+                    .setMinValues(1)
+                    .setMaxValues(1)),
+                new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+                    .setCustomId(CUSTOM_IDS.adminSalesCustomerRoleClear)
+                    .setLabel("Limpar")
+                    .setEmoji("\uD83E\uDDF9")
+                    .setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder()
+                    .setCustomId(CUSTOM_IDS.adminBackSales)
+                    .setLabel("Voltar")
+                    .setEmoji("\u2B05\uFE0F")
+                    .setStyle(discord_js_1.ButtonStyle.Secondary)),
+            ],
+        };
+    }
+    buildSalesStaffRolesPayload(message) {
+        return {
+            embeds: [this.buildSalesManagementEmbed(message ?? "Selecione os cargos da equipe que poderao ver todos os carrinhos.")],
+            components: [
+                new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.RoleSelectMenuBuilder()
+                    .setCustomId(CUSTOM_IDS.adminSalesStaffRolesSelect)
+                    .setPlaceholder("Selecione os cargos staff do carrinho")
+                    .setMinValues(1)
+                    .setMaxValues(10)),
+                new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+                    .setCustomId(CUSTOM_IDS.adminSalesStaffRolesClear)
+                    .setLabel("Limpar")
+                    .setEmoji("\uD83E\uDDF9")
+                    .setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder()
+                    .setCustomId(CUSTOM_IDS.adminBackSales)
+                    .setLabel("Voltar")
+                    .setEmoji("\u2B05\uFE0F")
+                    .setStyle(discord_js_1.ButtonStyle.Secondary)),
+            ],
+        };
+    }
+    buildSalesLogsChannelPayload(message) {
+        return {
+            embeds: [this.buildSalesManagementEmbed(message ?? "Selecione o canal privado onde o manager vai registrar abertura de carrinho, compras e setup.")],
+            components: [
+                new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ChannelSelectMenuBuilder()
+                    .setCustomId(CUSTOM_IDS.adminSalesLogsChannelSelect)
+                    .setPlaceholder("Selecione o canal de logs privados")
+                    .setChannelTypes(discord_js_1.ChannelType.GuildText, discord_js_1.ChannelType.GuildAnnouncement)
+                    .setMinValues(1)
+                    .setMaxValues(1)),
+                new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+                    .setCustomId(CUSTOM_IDS.adminSalesLogsChannelClear)
+                    .setLabel("Limpar")
+                    .setEmoji("\uD83E\uDDF9")
+                    .setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder()
+                    .setCustomId(CUSTOM_IDS.adminBackSales)
+                    .setLabel("Voltar")
+                    .setEmoji("\u2B05\uFE0F")
+                    .setStyle(discord_js_1.ButtonStyle.Secondary)),
+            ],
+        };
+    }
+    buildAdminReturnComponents() {
+        return [
+            new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+                .setCustomId(CUSTOM_IDS.adminBackHome)
+                .setLabel("Voltar")
+                .setEmoji("\u2B05\uFE0F")
+                .setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder()
+                .setCustomId(CUSTOM_IDS.adminProducts)
+                .setLabel("Produtos")
+                .setEmoji("\uD83D\uDCE6")
+                .setStyle(discord_js_1.ButtonStyle.Primary), new discord_js_1.ButtonBuilder()
+                .setCustomId(CUSTOM_IDS.adminRefresh)
+                .setLabel("Atualizar")
+                .setEmoji("\uD83D\uDD04")
+                .setStyle(discord_js_1.ButtonStyle.Secondary)),
+        ];
+    }
+    buildProductCatalogPayload(message) {
+        return this.buildAdminPanelPayload(message ?? "Use os botoes abaixo para criar, escolher e configurar seus produtos sem depender de comandos longos.", [this.buildProductsEmbed()], this.buildProductCatalogComponents());
+    }
+    buildProductManagementPayload(productSlug, message) {
+        return this.buildAdminPanelPayload(message ?? "Use os botoes abaixo para editar o produto selecionado.", [this.buildProductConfigurationEmbed(productSlug)], this.buildProductManagementComponents(productSlug));
+    }
+    buildProductPublishPayload(productSlug, message) {
+        const product = this.getResolvedProductBySlug(productSlug);
+        const publishEmbed = new discord_js_1.EmbedBuilder()
+            .setColor(0x7c3aed)
+            .setTitle(`Publicar Painel | ${product?.name ?? productSlug}`)
+            .setDescription(this.limitMessageSize([
+            message ?? "Escolha abaixo o canal onde o painel de vendas desse produto sera publicado.",
+            product ? `Produto: **${product.name}**` : null,
+            product ? `Slug: \`${product.slug}\`` : null,
+        ].filter(Boolean).join("\n")));
+        return this.buildAdminPanelPayload(message, [publishEmbed], this.buildProductPublishComponents(productSlug));
+    }
+    buildProductsEmbed() {
+        const products = this.dependencies.catalogService.listProducts();
         return new discord_js_1.EmbedBuilder()
             .setColor(0x2563eb)
-            .setTitle("Suas apps e assinaturas")
-            .setDescription(this.limitMessageSize(lines.join("\n").trim() || "Sem registros para mostrar."));
+            .setTitle("Produtos e Paineis")
+            .setDescription(this.limitMessageSize(products.length === 0
+            ? "Nenhum produto cadastrado ainda. Clique em **Criar Produto** para comecar."
+            : products
+                .slice(0, 20)
+                .map((product, index) => {
+                const runtimeSource = this.dependencies.managerRuntimeConfigService.getRuntimeSourceConfig(product.sourceSlug);
+                const sourceLabel = runtimeSource?.githubRepo
+                    ? runtimeSource.githubRepo
+                    : runtimeSource?.artifactPath ?? runtimeSource?.projectDir ?? "nao configurada";
+                return [
+                    `${index + 1}. **${product.name}**`,
+                    `Slug: \`${product.slug}\``,
+                    `Source: ${sourceLabel}`,
+                    `Planos: ${product.plans.length}`,
+                ].join("\n");
+            })
+                .join("\n\n")));
     }
-    buildAppsComponents(bundles) {
-        const needsSetup = bundles
-            .filter((bundle) => bundle.subscription.status === "active" &&
-            !bundle.instance &&
-            bundle.product?.botProvisioningMode === "customer_token" &&
-            this.findApprovedActivationPayment(bundle.subscription.id))
+    buildProductCatalogComponents() {
+        const rows = [];
+        const products = this.dependencies.catalogService
+            .listProducts()
+            .filter((product) => String(product?.slug ?? "").trim())
             .slice(0, 25);
-        if (needsSetup.length === 0) {
+        if (products.length > 0) {
+            rows.push(new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.StringSelectMenuBuilder()
+                .setCustomId(CUSTOM_IDS.adminProductsSelect)
+                .setPlaceholder("Escolha um produto para configurar")
+                .addOptions(products.map((product) => {
+                const runtimeSource = this.dependencies.managerRuntimeConfigService.getRuntimeSourceConfig(product.sourceSlug);
+                const sourceStatus = runtimeSource?.githubRepo || runtimeSource?.artifactPath || runtimeSource?.projectDir ? "source ok" : "source pendente";
+                return {
+                    label: clampText(product.name, 100, product.slug || "Produto"),
+                    description: clampText(`${product.slug} - ${sourceStatus}`, 100, "Produto sem slug"),
+                    value: String(product.slug).trim(),
+                };
+            }))));
+        }
+        rows.push(new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+            .setCustomId(CUSTOM_IDS.adminProductsCreate)
+            .setLabel("Criar Produto")
+            .setEmoji("\u2795")
+            .setStyle(discord_js_1.ButtonStyle.Success), new discord_js_1.ButtonBuilder()
+            .setCustomId(CUSTOM_IDS.adminBackHome)
+            .setLabel("Voltar")
+            .setEmoji("\u2B05\uFE0F")
+            .setStyle(discord_js_1.ButtonStyle.Secondary)));
+        return rows;
+    }
+    buildProductManagementComponents(productSlug) {
+        return [
+            new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+                .setCustomId(`${CUSTOM_IDS.adminProductBasicPrefix}${productSlug}`)
+                .setLabel("Configurar Produto")
+                .setEmoji("\uD83D\uDCDD")
+                .setStyle(discord_js_1.ButtonStyle.Primary), new discord_js_1.ButtonBuilder()
+                .setCustomId(`${CUSTOM_IDS.adminProductVisualPrefix}${productSlug}`)
+                .setLabel("Visual")
+                .setEmoji("\uD83C\uDFA8")
+                .setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder()
+                .setCustomId(`${CUSTOM_IDS.adminProductApprovedPrefix}${productSlug}`)
+                .setLabel("Aprovado")
+                .setEmoji("\u2705")
+                .setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder()
+                .setCustomId(`${CUSTOM_IDS.adminProductSourcePrefix}${productSlug}`)
+                .setLabel("Source GitHub")
+                .setEmoji("\uD83D\uDD17")
+                .setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder()
+                .setCustomId(`${CUSTOM_IDS.adminProductPlansPrefix}${productSlug}`)
+                .setLabel("Assinaturas")
+                .setEmoji("\uD83D\uDCB0")
+                .setStyle(discord_js_1.ButtonStyle.Secondary)),
+            new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+                .setCustomId(`${CUSTOM_IDS.adminProductRolePrefix}${productSlug}`)
+                .setLabel("Cargo")
+                .setEmoji("\uD83C\uDF96\uFE0F")
+                .setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder()
+                .setCustomId(`${CUSTOM_IDS.adminProductPreviewPrefix}${productSlug}`)
+                .setLabel("Preview")
+                .setEmoji("\uD83D\uDC40")
+                .setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder()
+                .setCustomId(`${CUSTOM_IDS.adminProductPublishPrefix}${productSlug}`)
+                .setLabel("Publicar Painel")
+                .setEmoji("\uD83D\uDCE3")
+                .setStyle(discord_js_1.ButtonStyle.Success)),
+            new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+                .setCustomId(CUSTOM_IDS.adminProductsCreate)
+                .setLabel("Novo Produto")
+                .setEmoji("\u2795")
+                .setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder()
+                .setCustomId(CUSTOM_IDS.adminBackProducts)
+                .setLabel("Voltar")
+                .setEmoji("\u2B05\uFE0F")
+                .setStyle(discord_js_1.ButtonStyle.Secondary)),
+        ];
+    }
+    buildProductPublishComponents(productSlug) {
+        return [
+            new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ChannelSelectMenuBuilder()
+                .setCustomId(`${CUSTOM_IDS.adminProductPublishChannelPrefix}${productSlug}`)
+                .setPlaceholder("Escolha o canal para publicar o painel")
+                .setChannelTypes(discord_js_1.ChannelType.GuildText, discord_js_1.ChannelType.GuildAnnouncement)
+                .setMinValues(1)
+                .setMaxValues(1)),
+            new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+                .setCustomId(`${CUSTOM_IDS.adminProductViewPrefix}${productSlug}`)
+                .setLabel("Voltar")
+                .setEmoji("\u2B05\uFE0F")
+                .setStyle(discord_js_1.ButtonStyle.Secondary)),
+        ];
+    }
+    buildProductRolePayload(productSlug, message) {
+        const product = this.dependencies.catalogService.getProductBySlug(productSlug);
+        const embed = new discord_js_1.EmbedBuilder()
+            .setColor(0x5865f2)
+            .setTitle(`Cargo | ${product?.name ?? productSlug}`)
+            .setDescription(this.limitMessageSize([
+            message ?? "Selecione abaixo o cargo que o cliente deve receber ao comprar este produto.",
+            product ? `Produto: **${product.name}**` : null,
+            product ? `Slug: \`${product.slug}\`` : null,
+            `Cargo atual: ${product?.customerRoleId ? `<@&${product.customerRoleId}>` : "nenhum"}`,
+        ].filter(Boolean).join("\n")));
+        return this.buildAdminPanelPayload(message, [embed], [
+            new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.RoleSelectMenuBuilder()
+                .setCustomId(`${CUSTOM_IDS.adminProductRoleSelectPrefix}${productSlug}`)
+                .setPlaceholder("Selecione o cargo do produto")
+                .setMinValues(1)
+                .setMaxValues(1)),
+            new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+                .setCustomId(`${CUSTOM_IDS.adminProductRoleClearPrefix}${productSlug}`)
+                .setLabel("Limpar")
+                .setEmoji("\uD83E\uDDF9")
+                .setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder()
+                .setCustomId(`${CUSTOM_IDS.adminProductViewPrefix}${productSlug}`)
+                .setLabel("Voltar")
+                .setEmoji("\u2B05\uFE0F")
+                .setStyle(discord_js_1.ButtonStyle.Secondary)),
+        ]);
+    }
+    buildOwnedAppEntries(userId) {
+        return this.dependencies.subscriptionService
+            .listByDiscordUserId(userId)
+            .filter(Boolean)
+            .filter((bundle) => ["active", "grace", "suspended"].includes(String(bundle?.subscription?.status ?? "").toLowerCase()))
+            .map((bundle) => {
+            const instance = bundle.instance ?? null;
+            const discordApp = instance
+                ? this.dependencies.store.discordApps.find((entry) => entry.id === instance.discordAppId) ?? null
+                : null;
+            const setupReady = !instance &&
+                bundle.product?.botProvisioningMode === "customer_token" &&
+                bundle.subscription.status === "active" &&
+                Boolean(this.findApprovedActivationPayment(bundle.subscription.id));
+            const displayName = clampText(instance?.config?.discordAppName ??
+                discordApp?.appName ??
+                bundle.product?.name ??
+                "Aplicacao", 100, "Aplicacao");
+            const subtitle = clampText(instance?.hostingAppId ??
+                bundle.subscription.id ??
+                bundle.product?.slug ??
+                "app", 100, "app");
+            return {
+                key: instance ? `inst_${instance.id}` : `sub_${bundle.subscription.id}`,
+                bundle,
+                instance,
+                discordApp,
+                setupReady,
+                displayName,
+                subtitle,
+            };
+        })
+            .sort((left, right) => {
+            const leftDate = Date.parse(left.instance?.updatedAt ?? left.bundle.subscription.updatedAt ?? left.bundle.subscription.createdAt ?? 0);
+            const rightDate = Date.parse(right.instance?.updatedAt ?? right.bundle.subscription.updatedAt ?? right.bundle.subscription.createdAt ?? 0);
+            return rightDate - leftDate;
+        });
+    }
+    findOwnedAppEntryByKey(userId, key) {
+        const normalizedKey = String(key ?? "").trim();
+        if (!normalizedKey) {
+            return null;
+        }
+        return this.buildOwnedAppEntries(userId).find((entry) => entry.key === normalizedKey) ?? null;
+    }
+    resolveAppsSelection(entries, requestedPage = 0, selectedKey = null) {
+        const pageSize = 25;
+        const total = entries.length;
+        const pageCount = Math.max(1, Math.ceil(Math.max(total, 1) / pageSize));
+        const selectedIndex = selectedKey ? entries.findIndex((entry) => entry.key === selectedKey) : -1;
+        const preferredPage = selectedIndex >= 0 ? Math.floor(selectedIndex / pageSize) : requestedPage;
+        const safePage = Math.max(0, Math.min(Number(preferredPage) || 0, pageCount - 1));
+        const pageEntries = entries.slice(safePage * pageSize, safePage * pageSize + pageSize);
+        const selected = pageEntries.find((entry) => entry.key === selectedKey) ?? pageEntries[0] ?? null;
+        return {
+            page: safePage,
+            pageCount,
+            pageEntries,
+            selected,
+        };
+    }
+    async buildAppsPanelPayload(userId, requestedPage = 0, selectedKey = null, view = "overview", notice = null) {
+        const entries = this.buildOwnedAppEntries(userId);
+        if (entries.length === 0) {
+            return {
+                embeds: [
+                    new discord_js_1.EmbedBuilder()
+                        .setColor(0xdc2626)
+                        .setTitle("Suas aplicacoes")
+                        .setDescription(this.limitMessageSize([
+                        notice ?? null,
+                        "Voce nao tem nenhuma aplicacao liberada no seu /apps agora.",
+                        "Compras pendentes ou nao aprovadas ainda nao aparecem aqui.",
+                    ].filter(Boolean).join("\n\n"))),
+                ],
+                components: [],
+            };
+        }
+        const state = this.resolveAppsSelection(entries, requestedPage, selectedKey);
+        const selectedEntry = state.selected ?? entries[0];
+        const squareCloudOverview = selectedEntry?.instance ? await this.loadSquareCloudAppOverview(selectedEntry.instance) : null;
+        const currentView = view === "settings" ? "settings" : "overview";
+        const embed = currentView === "settings"
+            ? this.buildAppsSettingsEmbed(selectedEntry, notice)
+            : this.buildAppsOverviewEmbed(selectedEntry, squareCloudOverview, notice);
+        const actionRows = currentView === "settings"
+            ? this.buildAppsSettingsComponents(selectedEntry, state.page)
+            : this.buildAppsOverviewComponents(selectedEntry, state.page);
+        const selectRow = this.buildAppsSelectRow(state.pageEntries, state.page, currentView, selectedEntry?.key ?? "");
+        const paginationRow = this.buildAppsPaginationRow(state.page, state.pageCount, selectedEntry?.key ?? "", currentView);
+        return {
+            embeds: [embed],
+            components: [...actionRows, selectRow, paginationRow].filter(Boolean),
+        };
+    }
+    async loadSquareCloudAppOverview(instance) {
+        if (!instance?.hostingAppId || instance.hostingAppId.startsWith("pending-")) {
+            return null;
+        }
+        if (!this.dependencies.squareCloudClient?.isConfigured?.()) {
+            return null;
+        }
+        try {
+            const [info, status] = await Promise.all([
+                this.dependencies.squareCloudClient.getAppInfo(instance.hostingAppId),
+                this.dependencies.squareCloudClient.getAppStatus(instance.hostingAppId),
+            ]);
+            return {
+                info: info?.response ?? info ?? null,
+                status: status?.response ?? status ?? null,
+                error: null,
+            };
+        }
+        catch (error) {
+            return {
+                info: null,
+                status: null,
+                error: error?.message ?? "Nao consegui consultar a SquareCloud.",
+            };
+        }
+    }
+    buildAppsOverviewEmbed(entry, overview, notice) {
+        if (!entry) {
+            return new discord_js_1.EmbedBuilder()
+                .setColor(0x2563eb)
+                .setTitle("Suas aplicacoes")
+                .setDescription("Selecione uma aplicacao para continuar.");
+        }
+        const instance = entry.instance;
+        const bundle = entry.bundle;
+        const metrics = this.extractAppsOverviewMetrics(instance, overview);
+        const lines = [
+            notice ? `**Atualizacao**\n${notice}` : null,
+            instance
+                ? [
+                    `**Aplicacao:** ${entry.displayName} (${bundle.product?.name ?? "Produto"})`,
+                    "",
+                    `\uD83D\uDFE2 | **Status**`,
+                    metrics.status,
+                    "",
+                    `\uD83D\uDDA5\uFE0F | **Cpu**`,
+                    metrics.cpu,
+                    `\uD83D\uDCBE | **Memoria Ram**`,
+                    metrics.ram,
+                    `\uD83D\uDDD2\uFE0F | **SSD**`,
+                    metrics.ssd,
+                    `\uD83C\uDF10 | **Network (Total)**`,
+                    metrics.networkTotal,
+                    `\uD83C\uDF10 | **Network (Now)**`,
+                    metrics.networkNow,
+                    `\u23F0 | **UpTime**`,
+                    metrics.uptime,
+                    "",
+                    `\uD83D\uDD53 | **Expira em**`,
+                    `${this.formatIsoDate(instance.expiresAt)} (${this.formatRelativeTimestamp(instance.expiresAt)})`,
+                    "",
+                    metrics.error ? `Aviso da SquareCloud: ${metrics.error}` : null,
+                    metrics.error ? "" : null,
+                    "**ID**",
+                    `\`${instance.id}\``,
+                ].filter(Boolean).join("\n")
+                : [
+                    `**Aplicacao:** ${entry.displayName} (${bundle.product?.name ?? "Produto"})`,
+                    "",
+                    `Status da assinatura: **${this.getStatusLabel(bundle.subscription.status)}**`,
+                    bundle.plan ? `Plano atual: **${bundle.plan.name}**` : null,
+                    bundle.subscription.currentPeriodEnd
+                        ? `Expira em: ${this.formatIsoDate(bundle.subscription.currentPeriodEnd)} (${this.formatRelativeTimestamp(bundle.subscription.currentPeriodEnd)})`
+                        : "Expira em: aguardando ativacao",
+                    entry.setupReady
+                        ? "Seu pagamento ja foi aprovado. Clique em **\uD83E\uDD16 Configurar Bot** para enviar nome, token e dono do bot."
+                        : "Essa compra ainda nao possui uma instancia provisionada.",
+                ].filter(Boolean).join("\n"),
+        ].filter(Boolean);
+        const embed = new discord_js_1.EmbedBuilder()
+            .setColor(instance?.status === "running" ? 0x22c55e : instance?.status === "suspended" ? 0xef4444 : 0x2563eb)
+            .setTitle("Manager | Suas Aplicacoes")
+            .setDescription(this.limitMessageSize(lines.join("\n\n")));
+        const imageUrl = String(bundle.product?.panelConfig?.imageUrl ?? "").trim();
+        if (isLikelyHttpUrl(imageUrl)) {
+            embed.setThumbnail(imageUrl);
+        }
+        return embed;
+    }
+    buildAppsSettingsEmbed(entry, notice) {
+        if (!entry) {
+            return new discord_js_1.EmbedBuilder()
+                .setColor(0x6b7280)
+                .setTitle("Configuracoes da Aplicacao")
+                .setDescription("Selecione uma aplicacao para continuar.");
+        }
+        const instance = entry.instance;
+        const bundle = entry.bundle;
+        const discordApp = entry.discordApp;
+        const lines = [
+            notice ? `**Atualizacao**\n${notice}` : null,
+            `**Aplicacao:** ${entry.displayName}`,
+            `**Produto:** ${bundle.product?.name ?? "Produto"}`,
+            `**Plano:** ${bundle.plan?.name ?? "Nao definido"}`,
+            `**Status da assinatura:** ${this.getStatusLabel(bundle.subscription.status)}`,
+            "",
+            `**Nome atual da aplicacao:** ${discordApp?.appName ?? instance?.config?.discordAppName ?? entry.displayName}`,
+            `**Application ID:** ${discordApp?.applicationId ?? instance?.config?.discordApplicationId ?? "nao definido"}`,
+            `**Client ID:** ${discordApp?.clientId ?? instance?.config?.discordClientId ?? "nao definido"}`,
+            `**Dono do bot:** ${instance?.config?.ownerDiscordUserId ? `<@${instance.config.ownerDiscordUserId}>` : "nao definido"}`,
+            `**Posse comercial:** ${bundle.subscription.commercialOwnerDiscordUserId ? `<@${bundle.subscription.commercialOwnerDiscordUserId}>` : "nao definido"}`,
+            `**SquareCloud App:** ${instance?.hostingAppId ?? "nao provisionada"}`,
+            instance?.installUrl ? `**Link para adicionar seu bot:** ${instance.installUrl}` : null,
+            "",
+            "Use os botoes abaixo para renomear, trocar token, alterar dono do bot, transferir a posse comercial ou deletar a aplicacao.",
+        ].filter(Boolean);
+        return new discord_js_1.EmbedBuilder()
+            .setColor(0x374151)
+            .setTitle("Configuracoes da Aplicacao")
+            .setDescription(this.limitMessageSize(lines.join("\n")));
+    }
+    buildAppsOverviewComponents(entry, page) {
+        if (!entry) {
             return [];
         }
-        return [
-            new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.StringSelectMenuBuilder()
-                .setCustomId(CUSTOM_IDS.appsSetupSelect)
-                .setPlaceholder("Escolha qual assinatura voce quer configurar")
-                .addOptions(needsSetup.map((bundle) => ({
-                label: `${bundle.product?.name ?? "Produto"} - ${bundle.plan?.name ?? "Plano"}`.slice(0, 100),
-                description: `Assinatura ${bundle.subscription.id.slice(0, 8)} - cliente envia o token do proprio bot`.slice(0, 100),
-                value: bundle.subscription.id,
-            })))),
+        if (entry.instance) {
+            return [
+                new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+                    .setCustomId(`${CUSTOM_IDS.appsPowerPrefix}start:${page}:${entry.key}`)
+                    .setLabel("Ligar")
+                    .setEmoji("\u2B06\uFE0F")
+                    .setStyle(discord_js_1.ButtonStyle.Success), new discord_js_1.ButtonBuilder()
+                    .setCustomId(`${CUSTOM_IDS.appsPowerPrefix}stop:${page}:${entry.key}`)
+                    .setLabel("Desligar")
+                    .setEmoji("\u2B07\uFE0F")
+                    .setStyle(discord_js_1.ButtonStyle.Danger), new discord_js_1.ButtonBuilder()
+                    .setCustomId(`${CUSTOM_IDS.appsPowerPrefix}restart:${page}:${entry.key}`)
+                    .setLabel("Reiniciar")
+                    .setEmoji("\uD83D\uDD04")
+                    .setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder()
+                    .setCustomId(`${CUSTOM_IDS.appsViewPrefix}settings:${page}:${entry.key}`)
+                    .setLabel("Configuracoes")
+                    .setEmoji("\u2699\uFE0F")
+                    .setStyle(discord_js_1.ButtonStyle.Secondary)),
+            ];
+        }
+        if (entry.setupReady) {
+            const rows = [
+                new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+                    .setCustomId(`${CUSTOM_IDS.appsSetupButtonPrefix}${page}:${entry.key}`)
+                    .setLabel("Configurar Bot")
+                    .setEmoji("\uD83E\uDD16")
+                    .setStyle(discord_js_1.ButtonStyle.Primary)),
+            ];
+            if (isLikelyHttpUrl(entry.bundle.product?.tutorialUrl)) {
+                rows.push(new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+                    .setLabel("Tutorial")
+                    .setEmoji("\uD83D\uDCF9")
+                    .setStyle(discord_js_1.ButtonStyle.Link)
+                    .setURL(entry.bundle.product.tutorialUrl)));
+            }
+            return rows;
+        }
+        return [];
+    }
+    buildAppsSettingsComponents(entry, page) {
+        if (!entry?.instance) {
+            return this.buildAppsOverviewComponents(entry, page);
+        }
+        const rows = [
+            new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+                .setCustomId(`${CUSTOM_IDS.appsRenamePrefix}${page}:${entry.key}`)
+                .setLabel("Alterar Nome da Aplicacao")
+                .setEmoji("\u270F\uFE0F")
+                .setStyle(discord_js_1.ButtonStyle.Success), new discord_js_1.ButtonBuilder()
+                .setCustomId(`${CUSTOM_IDS.appsTokenPrefix}${page}:${entry.key}`)
+                .setLabel("Alterar Token")
+                .setEmoji("\uD83D\uDD11")
+                .setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder()
+                .setCustomId(`${CUSTOM_IDS.appsOwnerPrefix}${page}:${entry.key}`)
+                .setLabel("Alterar Dono do Bot")
+                .setEmoji("\uD83D\uDD27")
+                .setStyle(discord_js_1.ButtonStyle.Secondary)),
+            new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+                .setCustomId(`${CUSTOM_IDS.appsTransferPrefix}${page}:${entry.key}`)
+                .setLabel("Transferir Posse da Aplicacao")
+                .setEmoji("\uD83D\uDCCB")
+                .setStyle(discord_js_1.ButtonStyle.Danger), new discord_js_1.ButtonBuilder()
+                .setCustomId(`${CUSTOM_IDS.appsDeletePrefix}${page}:${entry.key}`)
+                .setLabel("Deletar Aplicacao")
+                .setEmoji("\uD83D\uDDD1\uFE0F")
+                .setStyle(discord_js_1.ButtonStyle.Danger), entry.instance.installUrl
+                ? new discord_js_1.ButtonBuilder()
+                    .setLabel("Link Para Adicionar seu Bot")
+                    .setEmoji("\uD83E\uDD16")
+                    .setStyle(discord_js_1.ButtonStyle.Link)
+                    .setURL(entry.instance.installUrl)
+                : new discord_js_1.ButtonBuilder()
+                    .setCustomId(`${CUSTOM_IDS.appsViewPrefix}overview:${page}:${entry.key}`)
+                    .setLabel("Link indisponivel")
+                    .setEmoji("\uD83D\uDD17")
+                    .setStyle(discord_js_1.ButtonStyle.Secondary)
+                    .setDisabled(true), new discord_js_1.ButtonBuilder()
+                .setCustomId(`${CUSTOM_IDS.appsViewPrefix}overview:${page}:${entry.key}`)
+                .setLabel("Voltar")
+                .setEmoji("\u2B05\uFE0F")
+                .setStyle(discord_js_1.ButtonStyle.Secondary)),
         ];
+        return rows;
+    }
+    buildAppsSelectRow(pageEntries, page, view, selectedKey) {
+        const options = pageEntries
+            .map((entry) => {
+            const label = clampText(`${entry.displayName} - ${entry.subtitle}`, 100, entry.displayName);
+            const description = clampText(entry.instance
+                ? `${entry.bundle.product?.name ?? "Produto"} | ${this.getStatusLabel(entry.instance.status)}`
+                : entry.setupReady
+                    ? `${entry.bundle.product?.name ?? "Produto"} | aguardando configuracao`
+                    : `${entry.bundle.product?.name ?? "Produto"} | ${this.getStatusLabel(entry.bundle.subscription.status)}`, 100, entry.bundle.product?.name ?? "Produto");
+            return new discord_js_1.StringSelectMenuOptionBuilder()
+                .setLabel(label)
+                .setDescription(description)
+                .setValue(entry.key)
+                .setDefault(entry.key === selectedKey);
+        });
+        return new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.StringSelectMenuBuilder()
+            .setCustomId(`${CUSTOM_IDS.appsSelectPrefix}${page}:${view}`)
+            .setPlaceholder("Selecione uma aplicacao")
+            .addOptions(options));
+    }
+    buildAppsPaginationRow(page, pageCount, selectedKey, view) {
+        return new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+            .setCustomId(`${CUSTOM_IDS.appsPagePrefix}0:${selectedKey}:${view}:first`)
+            .setEmoji("\u23EE\uFE0F")
+            .setStyle(discord_js_1.ButtonStyle.Secondary)
+            .setDisabled(page <= 0), new discord_js_1.ButtonBuilder()
+            .setCustomId(`${CUSTOM_IDS.appsPagePrefix}${Math.max(0, page - 1)}:${selectedKey}:${view}:prev`)
+            .setEmoji("\u2B05\uFE0F")
+            .setStyle(discord_js_1.ButtonStyle.Secondary)
+            .setDisabled(page <= 0), new discord_js_1.ButtonBuilder()
+            .setCustomId(`${CUSTOM_IDS.appsPagePrefix}${page}:${selectedKey}:${view}:current`)
+            .setLabel(`Pagina ${page + 1}`)
+            .setStyle(discord_js_1.ButtonStyle.Success)
+            .setDisabled(true), new discord_js_1.ButtonBuilder()
+            .setCustomId(`${CUSTOM_IDS.appsPagePrefix}${Math.min(pageCount - 1, page + 1)}:${selectedKey}:${view}:next`)
+            .setEmoji("\u27A1\uFE0F")
+            .setStyle(discord_js_1.ButtonStyle.Secondary)
+            .setDisabled(page >= pageCount - 1), new discord_js_1.ButtonBuilder()
+            .setCustomId(`${CUSTOM_IDS.appsPagePrefix}${Math.max(0, pageCount - 1)}:${selectedKey}:${view}:last`)
+            .setEmoji("\u23ED\uFE0F")
+            .setStyle(discord_js_1.ButtonStyle.Secondary)
+            .setDisabled(page >= pageCount - 1));
+    }
+    buildAppsRenameModal(page, entry) {
+        const nameInput = new discord_js_1.TextInputBuilder()
+            .setCustomId("apps_rename_name")
+            .setLabel("Novo nome da aplicacao")
+            .setStyle(discord_js_1.TextInputStyle.Short)
+            .setRequired(true)
+            .setValue(String(entry.discordApp?.appName ?? entry.instance?.config?.discordAppName ?? entry.displayName).slice(0, 100));
+        return new discord_js_1.ModalBuilder()
+            .setCustomId(`${MODAL_IDS.appRenamePrefix}${page}:${entry.key}`)
+            .setTitle("Alterar Nome da Aplicacao")
+            .addComponents(new discord_js_1.ActionRowBuilder().addComponents(nameInput));
+    }
+    buildAppsTokenModal(page, entry) {
+        const tokenInput = new discord_js_1.TextInputBuilder()
+            .setCustomId("apps_token_value")
+            .setLabel("Novo token do bot")
+            .setStyle(discord_js_1.TextInputStyle.Paragraph)
+            .setRequired(true)
+            .setPlaceholder("Cole aqui o token do bot");
+        return new discord_js_1.ModalBuilder()
+            .setCustomId(`${MODAL_IDS.appTokenPrefix}${page}:${entry.key}`)
+            .setTitle(`Token | ${entry.displayName}`.slice(0, 45))
+            .addComponents(new discord_js_1.ActionRowBuilder().addComponents(tokenInput));
+    }
+    buildAppsOwnerModal(page, entry) {
+        const ownerInput = new discord_js_1.TextInputBuilder()
+            .setCustomId("apps_owner_user_id")
+            .setLabel("Novo dono do bot (Discord ID)")
+            .setStyle(discord_js_1.TextInputStyle.Short)
+            .setRequired(true)
+            .setValue(String(entry.instance?.config?.ownerDiscordUserId ?? "").slice(0, 32));
+        return new discord_js_1.ModalBuilder()
+            .setCustomId(`${MODAL_IDS.appOwnerPrefix}${page}:${entry.key}`)
+            .setTitle("Alterar Dono do Bot")
+            .addComponents(new discord_js_1.ActionRowBuilder().addComponents(ownerInput));
+    }
+    buildAppsTransferModal(page, entry) {
+        const transferInput = new discord_js_1.TextInputBuilder()
+            .setCustomId("apps_transfer_user_id")
+            .setLabel("Novo dono comercial (Discord ID)")
+            .setStyle(discord_js_1.TextInputStyle.Short)
+            .setRequired(true)
+            .setValue(String(entry.bundle.subscription.commercialOwnerDiscordUserId ?? "").slice(0, 32));
+        return new discord_js_1.ModalBuilder()
+            .setCustomId(`${MODAL_IDS.appTransferPrefix}${page}:${entry.key}`)
+            .setTitle("Transferir Posse da Aplicacao")
+            .addComponents(new discord_js_1.ActionRowBuilder().addComponents(transferInput));
+    }
+    buildAppsDeleteModal(page, entry) {
+        const deleteInput = new discord_js_1.TextInputBuilder()
+            .setCustomId("apps_delete_confirm")
+            .setLabel("Digite DELETAR ou o ID da aplicacao")
+            .setStyle(discord_js_1.TextInputStyle.Short)
+            .setRequired(true)
+            .setPlaceholder(entry.instance?.id ?? "DELETAR");
+        return new discord_js_1.ModalBuilder()
+            .setCustomId(`${MODAL_IDS.appDeletePrefix}${page}:${entry.key}`)
+            .setTitle("Deletar Aplicacao")
+            .addComponents(new discord_js_1.ActionRowBuilder().addComponents(deleteInput));
     }
     buildSubscribersEmbed(statusFilter = "all") {
         const bundles = this.dependencies.store.subscriptions
@@ -1165,7 +4213,7 @@ class ManagerBotService {
             .filter((bundle) => statusFilter === "all" || bundle.subscription.status === statusFilter);
         const lines = bundles.slice(0, 12).flatMap((bundle, index) => {
             return [
-                `${index + 1}. ${STATUS_EMOJIS[bundle.subscription.status] ?? "-"} <@${bundle.customer?.discordUserId ?? bundle.subscription.commercialOwnerDiscordUserId}>`,
+                `${index + 1}. ${STATUS_EMOJIS[bundle.subscription.status] ?? "-"} <@${bundle.subscription.commercialOwnerDiscordUserId ?? bundle.customer?.discordUserId}>`,
                 `Status: ${this.getStatusLabel(bundle.subscription.status)} - Produto: ${bundle.product?.name ?? "Produto"}`,
                 `Assinatura: \`${bundle.subscription.id}\``,
                 bundle.subscription.currentPeriodEnd ? `Vence: ${this.formatIsoDate(bundle.subscription.currentPeriodEnd)}` : "Vencimento: nao iniciado",
@@ -1189,7 +4237,7 @@ class ManagerBotService {
         const lines = pendingPayments.flatMap((payment, index) => {
             const bundle = this.dependencies.subscriptionService.getById(payment.subscriptionId);
             return [
-                `${index + 1}. ${bundle?.customer?.discordUserId ? `<@${bundle.customer.discordUserId}>` : "Cliente"} - ${bundle?.product?.name ?? "Produto"}`,
+                `${index + 1}. ${bundle?.subscription?.commercialOwnerDiscordUserId ? `<@${bundle.subscription.commercialOwnerDiscordUserId}>` : bundle?.customer?.discordUserId ? `<@${bundle.customer.discordUserId}>` : "Cliente"} - ${bundle?.product?.name ?? "Produto"}`,
                 `Payment ID: \`${payment.id}\``,
                 `Subscription ID: \`${payment.subscriptionId}\``,
                 `Valor: ${this.formatCurrency(payment.amountCents)}`,
@@ -1224,33 +4272,147 @@ class ManagerBotService {
             runtimeSource?.githubRepo ??
             artifactResolution?.sourcePath ??
             "nao configurada";
+        const readinessLabel = artifactResolution?.error ? "pendente" : "ok";
+        const panelConfig = product.panelConfig ?? {};
         return new discord_js_1.EmbedBuilder()
-            .setColor(0x2563eb)
+            .setColor(this.resolveProductPanelColor(product, 0x2563eb))
             .setTitle(`Produto | ${product.name}`)
-            .setDescription(this.limitMessageSize([
-            `Slug: \`${product.slug}\``,
-            `Source slug: \`${product.sourceSlug}\``,
-            `Provisionamento: ${product.botProvisioningMode}`,
-            `Tutorial: ${product.tutorialUrl ?? "nao definido"}`,
-            `Tipo da source: ${sourceMode}`,
-            `Source atual: ${sourceLocation}`,
-            runtimeSource?.githubRef ? `GitHub ref: ${runtimeSource.githubRef}` : null,
-            runtimeSource?.githubPath ? `GitHub path: ${runtimeSource.githubPath}` : null,
-            runtimeSource?.githubRepo ? `Repo privado: ${runtimeSource.githubToken ? "sim" : "nao"}` : null,
-            Array.isArray(runtimeSource?.excludePaths) && runtimeSource.excludePaths.length > 0
-                ? `Excluir do zip: ${runtimeSource.excludePaths.join(", ")}`
-                : null,
-            artifactResolution?.warning ? `Aviso: ${artifactResolution.warning}` : null,
-            artifactResolution?.error ? `Erro: ${artifactResolution.error}` : null,
-        ].filter(Boolean).join("\n")))
+            .setDescription(this.limitMessageSize(product.description || "Sem descricao cadastrada."))
             .addFields({
+            name: "Resumo",
+            value: [
+                `Slug: \`${product.slug}\``,
+                `Source slug: \`${product.sourceSlug}\``,
+                `Provisionamento: ${product.botProvisioningMode}`,
+                `Tutorial: ${product.tutorialUrl ?? "nao definido"}`,
+                `Preview: ${panelConfig.previewUrl ?? "nao definido"}`,
+                `Canal publicado: ${panelConfig.publishedChannelId ? `<#${panelConfig.publishedChannelId}>` : "nao publicado"}`,
+                `Cargo do produto: ${product.customerRoleId ? `<@&${product.customerRoleId}>` : "nao definido"}`,
+                `Pronto para venda: ${readinessLabel}`,
+            ].join("\n").slice(0, 1024),
+            inline: false,
+        }, {
+            name: "Source Atual",
+            value: [
+                `Tipo: ${sourceMode}`,
+                `Origem: ${sourceLocation}`,
+                runtimeSource?.githubRef ? `Ref: ${runtimeSource.githubRef}` : null,
+                runtimeSource?.githubPath ? `Subpasta: ${runtimeSource.githubPath}` : null,
+                runtimeSource?.githubRepo ? `Repo privado: ${runtimeSource.githubToken ? "sim" : "nao"}` : null,
+                Array.isArray(runtimeSource?.excludePaths) && runtimeSource.excludePaths.length > 0
+                    ? `Excluir: ${runtimeSource.excludePaths.join(", ")}`
+                    : null,
+                artifactResolution?.warning ? `Aviso: ${artifactResolution.warning}` : null,
+                artifactResolution?.error ? `Erro: ${artifactResolution.error}` : null,
+            ].filter(Boolean).join("\n").slice(0, 1024),
+            inline: false,
+        }, {
             name: "Planos",
             value: product.plans
                 .map((plan) => `- ${plan.name}: ${this.formatCurrency(plan.priceCents, plan.currency)}`)
                 .join("\n")
                 .slice(0, 1024) || "Nenhum plano configurado",
             inline: false,
+        }, {
+            name: "Visual do Painel",
+            value: [
+                `Titulo: ${panelConfig.title ?? "padrao do produto"}`,
+                `Resumo: ${panelConfig.summary ? "configurado" : "padrao"}`,
+                `Detalhes: ${panelConfig.details ? "configurados" : "padrao"}`,
+                `Imagem: ${panelConfig.imageUrl ? "configurada" : "nao definida"}`,
+                `Cor: ${panelConfig.embedColor ?? "padrao do manager"}`,
+                `Preview: ${panelConfig.previewUrl ? "configurado" : "nao definido"}`,
+                `Mensagem publicada: ${panelConfig.publishedMessageId ? "sincronizada" : "nao publicada"}`,
+                `Texto do preco: ${panelConfig.pricePrefix ?? "Planos a partir de"}`,
+                `Botao: ${panelConfig.buttonLabel ?? "Adicionar ao Carrinho"}`,
+                `Embed aprovada: ${panelConfig.approvedTitle || panelConfig.approvedDescription || panelConfig.approvedImageUrl || panelConfig.approvedEmbedColor ? "personalizada" : "padrao"}`,
+                `Imagem aprovada: ${panelConfig.approvedImageUrl ? "configurada" : "nao definida"}`,
+            ].join("\n").slice(0, 1024),
+            inline: false,
         });
+    }
+    buildProductVisualModal(productSlug) {
+        const product = this.getResolvedProductBySlug(productSlug);
+        if (!product) {
+            throw new Error("Produto nao encontrado.");
+        }
+        const panelConfig = product.panelConfig ?? {};
+        const titleInput = new discord_js_1.TextInputBuilder()
+            .setCustomId("panel_title")
+            .setLabel("Titulo do painel")
+            .setStyle(discord_js_1.TextInputStyle.Short)
+            .setRequired(false)
+            .setValue(String(panelConfig.title ?? product.name ?? "").slice(0, 100));
+        const summaryInput = new discord_js_1.TextInputBuilder()
+            .setCustomId("panel_summary")
+            .setLabel("Resumo principal")
+            .setStyle(discord_js_1.TextInputStyle.Paragraph)
+            .setRequired(false)
+            .setValue(String(panelConfig.summary ?? product.description ?? "").slice(0, 4000));
+        const detailsInput = new discord_js_1.TextInputBuilder()
+            .setCustomId("panel_details")
+            .setLabel("Detalhes e destaques")
+            .setStyle(discord_js_1.TextInputStyle.Paragraph)
+            .setRequired(false)
+            .setPlaceholder("Use varias linhas para descrever vantagens, detalhes e avisos.")
+            .setValue(String(panelConfig.details ?? "").slice(0, 4000));
+        const colorInput = new discord_js_1.TextInputBuilder()
+            .setCustomId("panel_embed_color")
+            .setLabel("Cor da embed/painel")
+            .setStyle(discord_js_1.TextInputStyle.Short)
+            .setRequired(false)
+            .setPlaceholder("Ex: #5865F2")
+            .setValue(String(panelConfig.embedColor ?? "").slice(0, 16));
+        const priceInput = new discord_js_1.TextInputBuilder()
+            .setCustomId("panel_price_prefix")
+            .setLabel("Texto acima do preco")
+            .setStyle(discord_js_1.TextInputStyle.Short)
+            .setRequired(false)
+            .setValue(String(panelConfig.pricePrefix ?? "Planos a partir de").slice(0, 100));
+        return new discord_js_1.ModalBuilder()
+            .setCustomId(`${MODAL_IDS.productVisualPrefix}${productSlug}`)
+            .setTitle(`Visual | ${product.name}`.slice(0, 45))
+            .addComponents(new discord_js_1.ActionRowBuilder().addComponents(titleInput), new discord_js_1.ActionRowBuilder().addComponents(summaryInput), new discord_js_1.ActionRowBuilder().addComponents(detailsInput), new discord_js_1.ActionRowBuilder().addComponents(colorInput), new discord_js_1.ActionRowBuilder().addComponents(priceInput));
+    }
+    buildProductApprovedModal(productSlug) {
+        const product = this.getResolvedProductBySlug(productSlug);
+        if (!product) {
+            throw new Error("Produto nao encontrado.");
+        }
+        const panelConfig = product.panelConfig ?? {};
+        const titleInput = new discord_js_1.TextInputBuilder()
+            .setCustomId("approved_title")
+            .setLabel("Titulo da embed aprovada")
+            .setStyle(discord_js_1.TextInputStyle.Short)
+            .setRequired(false)
+            .setPlaceholder("Ex: Pagamento aprovado")
+            .setValue(String(panelConfig.approvedTitle ?? "").slice(0, 100));
+        const descriptionInput = new discord_js_1.TextInputBuilder()
+            .setCustomId("approved_description")
+            .setLabel("Descricao da embed aprovada")
+            .setStyle(discord_js_1.TextInputStyle.Paragraph)
+            .setRequired(false)
+            .setPlaceholder("Use {mention}, {product_name}, {plan_name}, {amount}, {config_channel}, {setup_hint}")
+            .setValue(String(panelConfig.approvedDescription ?? "").slice(0, 4000));
+        const imageInput = new discord_js_1.TextInputBuilder()
+            .setCustomId("approved_image_url")
+            .setLabel("Imagem da embed aprovada (URL)")
+            .setStyle(discord_js_1.TextInputStyle.Short)
+            .setRequired(false)
+            .setPlaceholder("https://...")
+            .setMaxLength(1000)
+            .setValue(String(panelConfig.approvedImageUrl ?? "").slice(0, 1000));
+        const colorInput = new discord_js_1.TextInputBuilder()
+            .setCustomId("approved_embed_color")
+            .setLabel("Cor da embed aprovada")
+            .setStyle(discord_js_1.TextInputStyle.Short)
+            .setRequired(false)
+            .setPlaceholder("Ex: #22C55E")
+            .setValue(String(panelConfig.approvedEmbedColor ?? "").slice(0, 16));
+        return new discord_js_1.ModalBuilder()
+            .setCustomId(`${MODAL_IDS.productApprovedPrefix}${productSlug}`)
+            .setTitle(`Aprovado | ${product.name}`.slice(0, 45))
+            .addComponents(new discord_js_1.ActionRowBuilder().addComponents(titleInput), new discord_js_1.ActionRowBuilder().addComponents(descriptionInput), new discord_js_1.ActionRowBuilder().addComponents(imageInput), new discord_js_1.ActionRowBuilder().addComponents(colorInput));
     }
     buildPermissionsEmbed(access) {
         const resolved = access ?? this.dependencies.managerRuntimeConfigService.getResolvedAccessControl();
@@ -1308,13 +4470,224 @@ class ManagerBotService {
             .setTitle("Configurar Efi do Manager")
             .addComponents(new discord_js_1.ActionRowBuilder().addComponents(clientIdInput), new discord_js_1.ActionRowBuilder().addComponents(clientSecretInput), new discord_js_1.ActionRowBuilder().addComponents(pixKeyInput), new discord_js_1.ActionRowBuilder().addComponents(appBaseUrlInput), new discord_js_1.ActionRowBuilder().addComponents(webhookPathInput));
     }
-    buildBotSetupModal(paymentId, bundle) {
+    buildEfipayUploadModal() {
+        const certP12PassphraseInput = new discord_js_1.TextInputBuilder()
+            .setCustomId("efi_cert_p12_passphrase")
+            .setLabel("Senha do .p12 (opcional)")
+            .setStyle(discord_js_1.TextInputStyle.Short)
+            .setRequired(false)
+            .setMaxLength(200)
+            .setPlaceholder("Preencha apenas se o certificado exigir senha");
+        const certP12UploadLabel = new discord_js_1.LabelBuilder()
+            .setLabel("Certificado .p12")
+            .setDescription("Envie o .p12 da conta Efi (ate 10MB)")
+            .setFileUploadComponent((builder) => builder
+            .setCustomId("efi_cert_p12_upload")
+            .setRequired(true)
+            .setMaxValues(1));
+        return new discord_js_1.ModalBuilder()
+            .setCustomId(MODAL_IDS.efipayUpload)
+            .setTitle("Efi - Certificado")
+            .addComponents(new discord_js_1.ActionRowBuilder().addComponents(certP12PassphraseInput), certP12UploadLabel);
+    }
+    buildSalesTemplateModal() {
+        const sales = this.dependencies.managerRuntimeConfigService.getResolvedSalesSettings();
+        const templateInput = new discord_js_1.TextInputBuilder()
+            .setCustomId("sales_cart_channel_template")
+            .setLabel("Template do canal do carrinho")
+            .setStyle(discord_js_1.TextInputStyle.Short)
+            .setRequired(true)
+            .setPlaceholder("Ex: carrinho-{user}")
+            .setValue(String(sales.cartChannelNameTemplate ?? "carrinho-{user}").slice(0, 100));
+        return new discord_js_1.ModalBuilder()
+            .setCustomId(MODAL_IDS.salesTemplate)
+            .setTitle("Nome do Canal do Carrinho")
+            .addComponents(new discord_js_1.ActionRowBuilder().addComponents(templateInput));
+    }
+    buildSalesInactivityModal() {
+        const sales = this.dependencies.managerRuntimeConfigService.getResolvedSalesSettings();
+        const inactivityInput = new discord_js_1.TextInputBuilder()
+            .setCustomId("sales_cart_inactivity_minutes")
+            .setLabel("Minutos sem atividade")
+            .setStyle(discord_js_1.TextInputStyle.Short)
+            .setRequired(true)
+            .setPlaceholder("Maximo: 5")
+            .setValue(String(Math.min(5, Math.max(1, Number(sales.cartInactivityMinutes ?? 5)))).slice(0, 10));
+        return new discord_js_1.ModalBuilder()
+            .setCustomId(MODAL_IDS.salesInactivity)
+            .setTitle("Expiracao do Carrinho")
+            .addComponents(new discord_js_1.ActionRowBuilder().addComponents(inactivityInput));
+    }
+    buildCreateProductModal() {
+        const slugInput = new discord_js_1.TextInputBuilder()
+            .setCustomId("product_slug")
+            .setLabel("Slug do produto")
+            .setStyle(discord_js_1.TextInputStyle.Short)
+            .setRequired(true)
+            .setPlaceholder("Ex: bot-ticket-hype");
+        const nameInput = new discord_js_1.TextInputBuilder()
+            .setCustomId("product_name")
+            .setLabel("Nome do produto")
+            .setStyle(discord_js_1.TextInputStyle.Short)
+            .setRequired(true)
+            .setPlaceholder("Ex: Bot Ticket Hype");
+        const descriptionInput = new discord_js_1.TextInputBuilder()
+            .setCustomId("product_description")
+            .setLabel("Descricao curta")
+            .setStyle(discord_js_1.TextInputStyle.Paragraph)
+            .setRequired(false)
+            .setPlaceholder("Resumo que aparecera no painel de vendas");
+        return new discord_js_1.ModalBuilder()
+            .setCustomId(MODAL_IDS.productCreate)
+            .setTitle("Criar Produto")
+            .addComponents(new discord_js_1.ActionRowBuilder().addComponents(slugInput), new discord_js_1.ActionRowBuilder().addComponents(nameInput), new discord_js_1.ActionRowBuilder().addComponents(descriptionInput));
+    }
+    buildProductBasicsModal(productSlug) {
+        const product = this.dependencies.catalogService.getProductBySlug(productSlug);
+        if (!product) {
+            throw new Error("Produto nao encontrado.");
+        }
+        const panelConfig = product.panelConfig ?? {};
+        const nameInput = new discord_js_1.TextInputBuilder()
+            .setCustomId("product_name")
+            .setLabel("Nome do produto")
+            .setStyle(discord_js_1.TextInputStyle.Short)
+            .setRequired(true)
+            .setValue(String(product.name ?? "").slice(0, 100));
+        const descriptionInput = new discord_js_1.TextInputBuilder()
+            .setCustomId("product_description")
+            .setLabel("Descricao")
+            .setStyle(discord_js_1.TextInputStyle.Paragraph)
+            .setRequired(false)
+            .setValue(String(product.description ?? "").slice(0, 4000));
+        const tutorialInput = new discord_js_1.TextInputBuilder()
+            .setCustomId("product_tutorial_url")
+            .setLabel("Tutorial URL")
+            .setStyle(discord_js_1.TextInputStyle.Short)
+            .setRequired(false)
+            .setMaxLength(1000)
+            .setValue(String(product.tutorialUrl ?? "").slice(0, 1000));
+        const previewInput = new discord_js_1.TextInputBuilder()
+            .setCustomId("panel_preview_url")
+            .setLabel("Preview URL")
+            .setStyle(discord_js_1.TextInputStyle.Short)
+            .setRequired(false)
+            .setPlaceholder("https://youtu.be/...")
+            .setMaxLength(1000)
+            .setValue(String(panelConfig.previewUrl ?? "").slice(0, 1000));
+        const imageInput = new discord_js_1.TextInputBuilder()
+            .setCustomId("panel_image_url")
+            .setLabel("Imagem do painel (URL)")
+            .setStyle(discord_js_1.TextInputStyle.Short)
+            .setRequired(false)
+            .setPlaceholder("https://...")
+            .setMaxLength(1000)
+            .setValue(String(panelConfig.imageUrl ?? "").slice(0, 1000));
+        return new discord_js_1.ModalBuilder()
+            .setCustomId(`${MODAL_IDS.productBasicPrefix}${productSlug}`)
+            .setTitle(`Configurar | ${product.name}`.slice(0, 45))
+            .addComponents(new discord_js_1.ActionRowBuilder().addComponents(nameInput), new discord_js_1.ActionRowBuilder().addComponents(descriptionInput), new discord_js_1.ActionRowBuilder().addComponents(tutorialInput), new discord_js_1.ActionRowBuilder().addComponents(previewInput), new discord_js_1.ActionRowBuilder().addComponents(imageInput));
+    }
+    buildProductSourceModal(productSlug) {
+        const product = this.dependencies.catalogService.getProductBySlug(productSlug);
+        if (!product) {
+            throw new Error("Produto nao encontrado.");
+        }
+        const runtimeSource = this.dependencies.managerRuntimeConfigService.getRuntimeSourceConfig(product.sourceSlug) ?? {};
+        const sourceSlugInput = new discord_js_1.TextInputBuilder()
+            .setCustomId("source_slug")
+            .setLabel("Source slug")
+            .setStyle(discord_js_1.TextInputStyle.Short)
+            .setRequired(true)
+            .setValue(String(product.sourceSlug ?? product.slug).slice(0, 100));
+        const sourceRepoInput = new discord_js_1.TextInputBuilder()
+            .setCustomId("source_repo")
+            .setLabel("Repo GitHub")
+            .setStyle(discord_js_1.TextInputStyle.Short)
+            .setRequired(true)
+            .setPlaceholder("owner/repo ou URL")
+            .setValue(String(runtimeSource.githubRepo ?? "").slice(0, 100));
+        const sourceRefInput = new discord_js_1.TextInputBuilder()
+            .setCustomId("source_ref")
+            .setLabel("Branch ou ref")
+            .setStyle(discord_js_1.TextInputStyle.Short)
+            .setRequired(false)
+            .setValue(String(runtimeSource.githubRef ?? "main").slice(0, 100));
+        const sourcePathInput = new discord_js_1.TextInputBuilder()
+            .setCustomId("source_path")
+            .setLabel("Subpasta (opcional)")
+            .setStyle(discord_js_1.TextInputStyle.Short)
+            .setRequired(false)
+            .setValue(String(runtimeSource.githubPath ?? "").slice(0, 100));
+        const sourceExcludeInput = new discord_js_1.TextInputBuilder()
+            .setCustomId("source_exclude")
+            .setLabel("Excluir do zip")
+            .setStyle(discord_js_1.TextInputStyle.Short)
+            .setRequired(false)
+            .setPlaceholder("data, logs, transcripts")
+            .setValue(String(Array.isArray(runtimeSource.excludePaths) ? runtimeSource.excludePaths.join(", ") : "").slice(0, 100));
+        return new discord_js_1.ModalBuilder()
+            .setCustomId(`${MODAL_IDS.productSourcePrefix}${productSlug}`)
+            .setTitle(`Source | ${product.name}`.slice(0, 45))
+            .addComponents(new discord_js_1.ActionRowBuilder().addComponents(sourceSlugInput), new discord_js_1.ActionRowBuilder().addComponents(sourceRepoInput), new discord_js_1.ActionRowBuilder().addComponents(sourceRefInput), new discord_js_1.ActionRowBuilder().addComponents(sourcePathInput), new discord_js_1.ActionRowBuilder().addComponents(sourceExcludeInput));
+    }
+    buildProductPlansModal(productSlug) {
+        const product = this.dependencies.catalogService.listProducts().find((item) => item.slug === productSlug);
+        if (!product) {
+            throw new Error("Produto nao encontrado.");
+        }
+        const getPlanValue = (code) => this.formatCurrencyInput(product.plans.find((plan) => plan.code === code)?.priceCents ?? "");
+        const weeklyInput = new discord_js_1.TextInputBuilder()
+            .setCustomId("plan_weekly")
+            .setLabel("Semanal (R$)")
+            .setStyle(discord_js_1.TextInputStyle.Short)
+            .setRequired(false)
+            .setPlaceholder("Ex: 5,10")
+            .setValue(getPlanValue("weekly").slice(0, 100));
+        const monthlyInput = new discord_js_1.TextInputBuilder()
+            .setCustomId("plan_monthly")
+            .setLabel("Mensal (R$)")
+            .setStyle(discord_js_1.TextInputStyle.Short)
+            .setRequired(false)
+            .setPlaceholder("Ex: 10,15")
+            .setValue(getPlanValue("monthly").slice(0, 100));
+        const quarterlyInput = new discord_js_1.TextInputBuilder()
+            .setCustomId("plan_quarterly")
+            .setLabel("Trimestral (R$)")
+            .setStyle(discord_js_1.TextInputStyle.Short)
+            .setRequired(false)
+            .setPlaceholder("Ex: 29,84")
+            .setValue(getPlanValue("quarterly").slice(0, 100));
+        const semiannualInput = new discord_js_1.TextInputBuilder()
+            .setCustomId("plan_semiannual")
+            .setLabel("Semestral (R$)")
+            .setStyle(discord_js_1.TextInputStyle.Short)
+            .setRequired(false)
+            .setPlaceholder("Ex: 59,07")
+            .setValue(getPlanValue("semiannual").slice(0, 100));
+        const annualInput = new discord_js_1.TextInputBuilder()
+            .setCustomId("plan_annual")
+            .setLabel("Anual (R$)")
+            .setStyle(discord_js_1.TextInputStyle.Short)
+            .setRequired(false)
+            .setPlaceholder("Ex: 115,71")
+            .setValue(getPlanValue("annual").slice(0, 100));
+        return new discord_js_1.ModalBuilder()
+            .setCustomId(`${MODAL_IDS.productPlansPrefix}${productSlug}`)
+            .setTitle(`Planos | ${product.name}`.slice(0, 45))
+            .addComponents(new discord_js_1.ActionRowBuilder().addComponents(weeklyInput), new discord_js_1.ActionRowBuilder().addComponents(monthlyInput), new discord_js_1.ActionRowBuilder().addComponents(quarterlyInput), new discord_js_1.ActionRowBuilder().addComponents(semiannualInput), new discord_js_1.ActionRowBuilder().addComponents(annualInput));
+    }
+    buildBotSetupModal(paymentId, bundle, payment = null) {
+        const addonCodes = Array.isArray(payment?.metadata?.addonCodes)
+            ? payment.metadata.addonCodes.map((code) => String(code ?? "").trim()).filter(Boolean)
+            : [];
+        const hasCustomBioAddon = addonCodes.includes("custom-bio");
         const applicationNameInput = new discord_js_1.TextInputBuilder()
             .setCustomId("setup_application_name")
             .setLabel("Nome do bot/aplicacao")
             .setStyle(discord_js_1.TextInputStyle.Short)
             .setRequired(true)
-            .setValue(String(bundle.product?.name ?? "Bot Ticket Hype").slice(0, 80));
+            .setPlaceholder("Digite o nome final do bot/aplicacao");
         const botTokenInput = new discord_js_1.TextInputBuilder()
             .setCustomId("setup_bot_token")
             .setLabel("Token do bot do cliente")
@@ -1326,34 +4699,401 @@ class ManagerBotService {
             .setStyle(discord_js_1.TextInputStyle.Short)
             .setRequired(false)
             .setValue(String(bundle.subscription.commercialOwnerDiscordUserId ?? "").slice(0, 32));
-        return new discord_js_1.ModalBuilder()
+        const modal = new discord_js_1.ModalBuilder()
             .setCustomId(`${MODAL_IDS.botSetupPrefix}${paymentId}`)
             .setTitle("Configurar Bot Comprado")
             .addComponents(new discord_js_1.ActionRowBuilder().addComponents(applicationNameInput), new discord_js_1.ActionRowBuilder().addComponents(botTokenInput), new discord_js_1.ActionRowBuilder().addComponents(ownerDiscordUserIdInput));
+        if (hasCustomBioAddon) {
+            const customBioInput = new discord_js_1.TextInputBuilder()
+                .setCustomId("setup_custom_bio_text")
+                .setLabel("Bio personalizada do bot")
+                .setStyle(discord_js_1.TextInputStyle.Paragraph)
+                .setRequired(true)
+                .setPlaceholder("Ex: Tickets automáticos, loja integrada, suporte 24/7...");
+            modal.addComponents(new discord_js_1.ActionRowBuilder().addComponents(customBioInput));
+        }
+        return modal;
     }
     buildPixCheckoutResponse(input) {
         const { checkout, payment } = input.checkout;
-        const descriptionLines = [
-            input.intro,
-            `Produto: **${input.productName}**`,
-            `Plano: **${input.planName}**`,
-            `Valor: **${this.formatCurrency(checkout.totalAmountCents)}**`,
-            checkout.expiresAt ? `Expira: ${this.formatRelativeTimestamp(checkout.expiresAt)}` : null,
-            `Payment ID: \`${payment.id}\``,
-            input.setupHint,
-            checkout.paymentUrl ? `Link visualizacao: ${checkout.paymentUrl}` : null,
-        ].filter(Boolean);
+        const addons = Array.isArray(checkout?.metadata?.addons)
+            ? checkout.metadata.addons.filter((addon) => addon && typeof addon === "object")
+            : [];
+        const addonLines = addons.length > 0
+            ? addons.map((addon) => `- ${addon.name}${Number(addon.priceCents ?? 0) > 0 ? ` (${this.formatCurrency(addon.priceCents)})` : ""}`).join("\n").slice(0, 1024)
+            : null;
+        const pixCode = String(checkout.pixCode ?? "").trim();
+        const rawQrImageValue = String(checkout.qrCodeImage ?? "").trim();
+        const qrImageAttachment = buildImageAttachmentFromDataUri(rawQrImageValue, `pix-${payment.id}`);
+        const qrImageUrl = qrImageAttachment
+            ? ""
+            : rawQrImageValue || this.buildPixQrCodeImageUrl(pixCode);
         const embed = new discord_js_1.EmbedBuilder()
             .setColor(0x16a34a)
             .setTitle(input.title)
-            .setDescription(this.limitMessageSize(descriptionLines.join("\n")));
-        const content = checkout.pixCode
-            ? `Pix copia e cola:\n\`\`\`\n${this.limitMessageSize(checkout.pixCode, 1700)}\n\`\`\``
-            : "A Efipay nao retornou o Pix copia e cola para este checkout.";
+            .setDescription(this.limitMessageSize([
+            input.intro,
+            "",
+            "Use o QR Code abaixo como principal opcao de pagamento.",
+            pixCode ? "Se preferir, use o botao `Pix Copia e Cola` para receber o codigo em mensagem privada." : "O codigo Pix copia e cola nao foi retornado pela Efi.",
+            "Voce tambem pode cancelar a compra antes de pagar usando o botao `Cancelar Compra`.",
+        ].filter(Boolean).join("\n")))
+            .addFields({
+            name: "Produto",
+            value: `**${input.productName}**`,
+            inline: true,
+        }, {
+            name: "Plano",
+            value: `**${input.planName}**`,
+            inline: true,
+        }, {
+            name: "Valor",
+            value: `**${this.formatCurrency(checkout.totalAmountCents)}**`,
+            inline: true,
+        }, {
+            name: "Expira",
+            value: checkout.expiresAt ? this.formatRelativeTimestamp(checkout.expiresAt) : "Nao informado",
+            inline: true,
+        }, {
+            name: "Payment ID",
+            value: `\`${payment.id}\``,
+            inline: true,
+        }, {
+            name: "Validacao",
+            value: "O pagamento e validado automaticamente. Assim que aprovar, o manager atualiza este carrinho e libera seu acesso.",
+            inline: false,
+        }, {
+            name: "Proximo passo",
+            value: this.limitMessageSize(input.setupHint ?? "Depois da aprovacao, acompanhe tudo em `/apps`.", 1024),
+            inline: false,
+        });
+        if (addonLines) {
+            embed.addFields({
+                name: "Adicionais",
+                value: addonLines,
+                inline: false,
+            });
+        }
+        if (qrImageAttachment) {
+            embed.setImage(`attachment://${qrImageAttachment.name}`);
+        }
+        else if (isLikelyHttpUrl(qrImageUrl)) {
+            embed.setImage(qrImageUrl);
+        }
+        const components = [];
+        const actionButtons = [];
+        if (pixCode) {
+            actionButtons.push(new discord_js_1.ButtonBuilder()
+                .setCustomId(`${CUSTOM_IDS.pixCopyPrefix}${payment.id}`)
+                .setLabel("Pix Copia e Cola")
+                .setEmoji("\uD83D\uDCCB")
+                .setStyle(discord_js_1.ButtonStyle.Secondary));
+        }
+        if (String(payment.status ?? "").toLowerCase() === "pending") {
+            actionButtons.push(new discord_js_1.ButtonBuilder()
+                .setCustomId(`${CUSTOM_IDS.pixCancelPrefix}${payment.id}`)
+                .setLabel("Cancelar Compra")
+                .setEmoji("\uD83D\uDDD1\uFE0F")
+                .setStyle(discord_js_1.ButtonStyle.Danger));
+        }
+        if (actionButtons.length > 0) {
+            components.push(new discord_js_1.ActionRowBuilder().addComponents(...actionButtons));
+        }
         return {
-            content,
+            content: null,
             embeds: [embed],
+            components,
+            files: qrImageAttachment ? [qrImageAttachment] : [],
         };
+    }
+    buildPixQrCodeImageUrl(pixCopyPaste) {
+        const pixCode = String(pixCopyPaste ?? "").trim();
+        if (!pixCode) {
+            return "";
+        }
+        const params = new URLSearchParams({
+            text: pixCode,
+            size: "620",
+            format: "png",
+            ecLevel: "H",
+            margin: "2",
+            dark: "2563eb",
+            light: "f8fbff",
+        });
+        return `https://quickchart.io/qr?${params.toString()}`;
+    }
+    getPaymentOwnerDiscordUserId(bundle) {
+        const subscriptionOwnerId = String(bundle?.subscription?.subscription?.commercialOwnerDiscordUserId ?? "").trim();
+        if (subscriptionOwnerId) {
+            return subscriptionOwnerId;
+        }
+        const customerId = String(bundle?.subscription?.customer?.discordUserId ?? bundle?.payment?.metadata?.customerDiscordUserId ?? "").trim();
+        return customerId || null;
+    }
+    canManagePaymentBundle(userId, bundle) {
+        const normalizedUserId = String(userId ?? "").trim();
+        if (!normalizedUserId || !bundle?.payment) {
+            return false;
+        }
+        if (this.hasAdminAccess({ user: { id: normalizedUserId } })) {
+            return true;
+        }
+        if (bundle?.subscription?.subscription) {
+            return this.canManageSubscription(normalizedUserId, bundle.subscription.subscription);
+        }
+        return this.getPaymentOwnerDiscordUserId(bundle) === normalizedUserId;
+    }
+    buildConfigChannelUrl(guildId) {
+        const normalizedGuildId = String(guildId ?? "").trim();
+        if (!normalizedGuildId || !PURCHASE_CONFIG_CHANNEL_ID) {
+            return "";
+        }
+        return `https://discord.com/channels/${normalizedGuildId}/${PURCHASE_CONFIG_CHANNEL_ID}`;
+    }
+    getPurchaseConfigChannelMention() {
+        return PURCHASE_CONFIG_CHANNEL_ID ? `<#${PURCHASE_CONFIG_CHANNEL_ID}>` : "`/apps`";
+    }
+    buildApprovedPaymentSetupHint(bundle) {
+        const hasCustomBioAddon = Array.isArray(bundle?.payment?.metadata?.addonCodes) &&
+            bundle.payment.metadata.addonCodes.includes("custom-bio");
+        const configTarget = this.getPurchaseConfigChannelMention();
+        return hasCustomBioAddon
+            ? `Va para ${configTarget} e use \`/apps\` > configurar bot. A opcao de bio personalizada foi liberada para voce informar o texto do bot.`
+            : `Va para ${configTarget} e use \`/apps\` > configurar bot para gerenciar sua aplicacao.`;
+    }
+    buildApprovedPaymentTemplateContext(bundle) {
+        const productName = bundle?.subscription?.product?.name || String(bundle?.payment?.metadata?.productSlug ?? "").trim() || "Produto";
+        const planName = bundle?.subscription?.plan?.name || String(bundle?.payment?.metadata?.planCode ?? "").trim() || "Plano";
+        const ownerUserId = this.getPaymentOwnerDiscordUserId(bundle);
+        return {
+            ownerUserId,
+            productName,
+            planName,
+            amount: this.formatCurrency(bundle?.payment?.amountCents ?? 0),
+            configChannel: this.getPurchaseConfigChannelMention(),
+            setupHint: this.buildApprovedPaymentSetupHint(bundle),
+        };
+    }
+    resolveApprovedPaymentTemplate(template, context, fallback) {
+        const rawTemplate = String(template ?? "").trim() || String(fallback ?? "").trim();
+        return rawTemplate
+            .replace(/\{(?:mention|mencao)\}/giu, context.ownerUserId ? `<@${context.ownerUserId}>` : "")
+            .replace(/\{(?:product|product_name|produto|nome_produto)\}/giu, context.productName)
+            .replace(/\{(?:plan|plan_name|plano|nome_plano)\}/giu, context.planName)
+            .replace(/\{(?:amount|valor)\}/giu, context.amount)
+            .replace(/\{(?:config_channel|canal_config)\}/giu, context.configChannel)
+            .replace(/\{(?:setup_hint|dica_setup)\}/giu, context.setupHint)
+            .replace(/\{(?:apps_command|comando_apps)\}/giu, "`/apps`")
+            .replace(/\n{3,}/gu, "\n\n")
+            .trim();
+    }
+    buildApprovedPixCheckoutPayload(bundle, guildId = null) {
+        const templateContext = this.buildApprovedPaymentTemplateContext(bundle);
+        const { productName, planName, ownerUserId } = templateContext;
+        const panelConfig = bundle?.product?.panelConfig ?? bundle?.subscription?.product?.panelConfig ?? {};
+        const configChannelMention = this.getPurchaseConfigChannelMention();
+        const addons = Array.isArray(bundle?.payment?.metadata?.addons) ? bundle.payment.metadata.addons : [];
+        const addonLines = addons.length > 0
+            ? addons.map((addon) => `- ${addon.name}${Number(addon.priceCents ?? 0) > 0 ? ` (${this.formatCurrency(addon.priceCents)})` : ""}`).join("\n").slice(0, 1024)
+            : null;
+        const defaultDescription = [
+            ownerUserId ? `<@${ownerUserId}>` : null,
+            "Seu pagamento foi aprovado com sucesso.",
+            `Va agora para ${configChannelMention} e use \`/apps\` para gerenciar a aplicacao comprada.`,
+            "Todas as configuracoes do aplicativo comprado sao feitas por esse comando.",
+            templateContext.setupHint,
+        ].filter(Boolean).join("\n");
+        const approvedTitle = this.resolveApprovedPaymentTemplate(panelConfig.approvedTitle, templateContext, "Pagamento aprovado");
+        const approvedDescription = this.resolveApprovedPaymentTemplate(panelConfig.approvedDescription, templateContext, defaultDescription);
+        const approvedImageUrl = String(panelConfig.approvedImageUrl ?? "").trim();
+        const approvedEmbedColor = normalizeHexColor(panelConfig.approvedEmbedColor ?? panelConfig.embedColor);
+        const embed = new discord_js_1.EmbedBuilder()
+            .setColor(approvedEmbedColor ? Number.parseInt(approvedEmbedColor.slice(1), 16) : 0x22c55e)
+            .setTitle(String(approvedTitle || "Pagamento aprovado").slice(0, 256))
+            .setDescription(this.limitMessageSize(approvedDescription))
+            .addFields({
+            name: "Produto",
+            value: `**${productName}**`,
+            inline: true,
+        }, {
+            name: "Plano",
+            value: `**${planName}**`,
+            inline: true,
+        }, {
+            name: "Valor aprovado",
+            value: `**${this.formatCurrency(bundle?.payment?.amountCents ?? 0)}**`,
+            inline: true,
+        }, {
+            name: "Onde configurar",
+            value: PURCHASE_CONFIG_CHANNEL_ID ? `${configChannelMention} com \`/apps\`` : "`/apps`",
+            inline: false,
+        });
+        if (addonLines) {
+            embed.addFields({
+                name: "Adicionais liberados",
+                value: addonLines,
+                inline: false,
+            });
+        }
+        if (isLikelyHttpUrl(approvedImageUrl)) {
+            embed.setImage(approvedImageUrl);
+        }
+        const configChannelUrl = this.buildConfigChannelUrl(guildId);
+        const components = configChannelUrl
+            ? [
+                new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+                    .setStyle(discord_js_1.ButtonStyle.Link)
+                    .setLabel("Ir para configuracao")
+                    .setEmoji("\u2699\uFE0F")
+                    .setURL(configChannelUrl)),
+            ]
+            : [];
+        return {
+            content: ownerUserId ? `<@${ownerUserId}>` : null,
+            allowedMentions: ownerUserId ? { parse: [], users: [ownerUserId] } : undefined,
+            embeds: [embed],
+            components,
+            attachments: [],
+            files: [],
+        };
+    }
+    buildCancelledPixCheckoutPayload(bundle) {
+        const productName = bundle?.subscription?.product?.name || String(bundle?.payment?.metadata?.productSlug ?? "").trim() || "Produto";
+        const planName = bundle?.subscription?.plan?.name || String(bundle?.payment?.metadata?.planCode ?? "").trim() || "Plano";
+        const ownerUserId = this.getPaymentOwnerDiscordUserId(bundle);
+        return {
+            content: ownerUserId ? `<@${ownerUserId}>` : null,
+            allowedMentions: ownerUserId ? { parse: [], users: [ownerUserId] } : undefined,
+            embeds: [
+                new discord_js_1.EmbedBuilder()
+                    .setColor(0xef4444)
+                    .setTitle("Compra cancelada")
+                    .setDescription(this.limitMessageSize([
+                    ownerUserId ? `<@${ownerUserId}>` : null,
+                    "Esse Pix foi cancelado antes da aprovacao.",
+                    "Se quiser comprar novamente, abra o painel do produto e gere um novo checkout.",
+                ].filter(Boolean).join("\n")))
+                    .addFields({
+                    name: "Produto",
+                    value: `**${productName}**`,
+                    inline: true,
+                }, {
+                    name: "Plano",
+                    value: `**${planName}**`,
+                    inline: true,
+                }, {
+                    name: "Valor",
+                    value: `**${this.formatCurrency(bundle?.payment?.amountCents ?? 0)}**`,
+                    inline: true,
+                }),
+            ],
+            components: [],
+            attachments: [],
+            files: [],
+        };
+    }
+    async handlePixCopyButton(interaction) {
+        const paymentId = String(interaction.customId.slice(CUSTOM_IDS.pixCopyPrefix.length) ?? "").trim();
+        const bundle = this.dependencies.billingService.getPaymentById(paymentId);
+        if (!bundle?.payment || !bundle?.checkout) {
+            await this.replyEphemeral(interaction, "Esse checkout Pix nao esta mais disponivel.");
+            return;
+        }
+        if (!this.canManagePaymentBundle(interaction.user.id, bundle)) {
+            await this.replyEphemeral(interaction, "Apenas o dono da compra pode copiar esse codigo Pix.");
+            return;
+        }
+        if (String(bundle.payment.status ?? "").toLowerCase() !== "pending") {
+            await this.replyEphemeral(interaction, "Esse Pix nao esta mais pendente. Gere um novo pagamento se necessario.");
+            return;
+        }
+        const pixCode = String(bundle.checkout.pixCode ?? "").trim();
+        if (!pixCode) {
+            await this.replyEphemeral(interaction, "A Efi nao retornou o codigo Pix copia e cola para esse checkout.");
+            return;
+        }
+        await this.replyEphemeral(interaction, pixCode);
+    }
+    async handlePixCancelButton(interaction) {
+        const paymentId = String(interaction.customId.slice(CUSTOM_IDS.pixCancelPrefix.length) ?? "").trim();
+        const bundle = this.dependencies.billingService.getPaymentById(paymentId);
+        if (!bundle?.payment) {
+            await this.replyEphemeral(interaction, "Esse checkout Pix nao foi encontrado.");
+            return;
+        }
+        if (!this.canManagePaymentBundle(interaction.user.id, bundle)) {
+            await this.replyEphemeral(interaction, "Apenas o dono da compra pode cancelar esse pagamento.");
+            return;
+        }
+        if (String(bundle.payment.status ?? "").toLowerCase() === "approved") {
+            await this.replyEphemeral(interaction, "Esse pagamento ja foi aprovado.");
+            return;
+        }
+        if (String(bundle.payment.status ?? "").toLowerCase() !== "pending") {
+            await this.replyEphemeral(interaction, "Esse pagamento nao esta mais pendente.");
+            return;
+        }
+        await interaction.deferUpdate().catch(() => null);
+        const result = await this.dependencies.billingService.cancelPendingPayment(paymentId, {
+            reason: "cancelled_by_customer",
+            providerStatus: "cancelled_by_customer",
+            cancelledByUserId: interaction.user.id,
+        });
+        await this.persistStoreIfNeeded();
+        const channelId = String(result?.payment?.metadata?.cartChannelId ?? result?.checkout?.metadata?.cartChannelId ?? interaction.channel?.id ?? "").trim() || null;
+        if (channelId) {
+            this.clearCartRuntimeState(channelId);
+        }
+        await this.logSalesEvent({
+            type: "cart_closed_manual",
+            userId: this.getPaymentOwnerDiscordUserId(bundle) ?? interaction.user.id,
+            channelId,
+            productName: bundle?.subscription?.product?.name || String(bundle?.payment?.metadata?.productSlug ?? "").trim() || "Produto",
+            planName: bundle?.subscription?.plan?.name || String(bundle?.payment?.metadata?.planCode ?? "").trim() || "Plano",
+            amountCents: Number(bundle?.payment?.amountCents ?? 0),
+            currency: bundle?.subscription?.plan?.currency ?? "BRL",
+            addons: Array.isArray(bundle?.payment?.metadata?.addons) ? bundle.payment.metadata.addons : [],
+            note: "Checkout Pix cancelado pelo cliente antes da aprovacao.",
+        });
+        const payload = this.buildCancelledPixCheckoutPayload({
+            ...bundle,
+            payment: result.payment,
+            checkout: result.checkout,
+            subscription: result.subscription,
+        });
+        await this.updateCartInteractionMessage(interaction, payload).catch(() => null);
+    }
+    async handlePaymentApprovedNotification(bundle) {
+        if (!this.client || !bundle?.payment) {
+            return false;
+        }
+        const channelId = String(bundle.payment.metadata?.cartChannelId ?? bundle.checkout?.metadata?.cartChannelId ?? "").trim();
+        const messageId = String(bundle.payment.metadata?.cartMessageId ?? bundle.checkout?.metadata?.cartMessageId ?? "").trim();
+        const approvedAt = Math.max(1, Date.parse(String(bundle.payment.paidAt ?? "")) || Date.now());
+        if (channelId) {
+            this.clearCartRuntimeState(channelId);
+        }
+        if (!channelId) {
+            return false;
+        }
+        const channel = this.client.channels.cache.get(channelId) ?? (await this.client.channels.fetch(channelId).catch(() => null));
+        if (!channel?.isTextBased?.()) {
+            return false;
+        }
+        const payload = this.buildApprovedPixCheckoutPayload(bundle, channel.guildId ?? null);
+        if (messageId && channel.messages?.fetch) {
+            const message = await channel.messages.fetch(messageId).catch(() => null);
+            if (message?.editable) {
+                await message.edit(payload).catch(() => null);
+                await this.markCartChannelApproved(channel, approvedAt);
+                this.scheduleCartApprovedClosure(channel, approvedAt);
+                return true;
+            }
+        }
+        await channel.send(payload).catch(() => null);
+        await this.markCartChannelApproved(channel, approvedAt);
+        this.scheduleCartApprovedClosure(channel, approvedAt);
+        return true;
     }
     extractApplicationOwnerUserIds(application) {
         const ownerIds = new Set();
@@ -1425,6 +5165,504 @@ class ManagerBotService {
         }
         return normalized;
     }
+    findProductBySearch(search) {
+        const products = this.dependencies.catalogService.listProducts();
+        if (!search) {
+            return products[0] ?? null;
+        }
+        const normalizedSearch = normalizeTextForMatch(search);
+        const exact = products.find((product) => normalizeTextForMatch(product.slug) === normalizedSearch ||
+            normalizeTextForMatch(product.name) === normalizedSearch);
+        if (exact) {
+            return exact;
+        }
+        return (products.find((product) => normalizeTextForMatch(product.slug).includes(normalizedSearch) ||
+            normalizeTextForMatch(product.name).includes(normalizedSearch)) ?? null);
+    }
+    buildProductAutocompleteChoices(search) {
+        const normalizedSearch = normalizeTextForMatch(search);
+        return this.dependencies.catalogService
+            .listProducts()
+            .filter((product) => {
+            if (!normalizedSearch) {
+                return true;
+            }
+            return normalizeTextForMatch(product.slug).includes(normalizedSearch) ||
+                normalizeTextForMatch(product.name).includes(normalizedSearch);
+        })
+            .slice(0, 25)
+            .map((product) => ({
+            name: clampText(`${product.name || product.slug} (${product.slug})`, 100, product.slug || "Produto"),
+            value: String(product.slug ?? "").trim(),
+        }))
+            .filter((choice) => choice.value);
+    }
+    parseCurrencyInputToCents(value) {
+        const normalized = String(value ?? "").trim();
+        if (!normalized) {
+            return undefined;
+        }
+        const sanitized = normalized
+            .replace(/R\$/giu, "")
+            .replace(/\s+/gu, "")
+            .trim();
+        if (!sanitized) {
+            return undefined;
+        }
+        if (/^\d+$/u.test(sanitized)) {
+            if (sanitized.length >= 3) {
+                return Math.round(Number(sanitized));
+            }
+            return Math.round(Number(sanitized) * 100);
+        }
+        const decimalNormalized = sanitized.includes(",") && sanitized.includes(".")
+            ? sanitized.replace(/\./gu, "").replace(",", ".")
+            : sanitized.replace(",", ".");
+        const parsed = Number(decimalNormalized);
+        if (!Number.isFinite(parsed) || parsed <= 0) {
+            throw new Error("Use valores como `5,10`, `10,15`, `29,84` ou, se preferir o formato antigo, `510`.");
+        }
+        return Math.round(parsed * 100);
+    }
+    formatCurrencyInput(amountCents) {
+        const cents = Number(amountCents);
+        if (!Number.isFinite(cents)) {
+            return "";
+        }
+        return new Intl.NumberFormat("pt-BR", {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+        }).format(cents / 100);
+    }
+    normalizePanelEmbedColorInput(value) {
+        const normalized = String(value ?? "").trim();
+        if (!normalized) {
+            return null;
+        }
+        const resolved = normalizeHexColor(normalized);
+        if (!resolved) {
+            throw new Error("Use uma cor hexadecimal valida, como `#5865F2`, `5865F2` ou `#586`.");
+        }
+        return resolved;
+    }
+    resolveProductPanelColor(product, fallback = 0x2563eb) {
+        const normalized = normalizeHexColor(product?.panelConfig?.embedColor);
+        if (!normalized) {
+            return fallback;
+        }
+        return Number.parseInt(normalized.slice(1), 16);
+    }
+    getResolvedProductBySlug(slug) {
+        const normalizedSlug = String(slug ?? "").trim();
+        if (!normalizedSlug) {
+            return null;
+        }
+        return this.dependencies.catalogService.listProducts().find((item) => item.slug === normalizedSlug) ?? null;
+    }
+    getDefaultPlan(product) {
+        if (!product?.plans?.length) {
+            return null;
+        }
+        return product.plans.find((plan) => plan.code === "monthly") ?? product.plans[0] ?? null;
+    }
+    normalizeCartState(rawState, product) {
+        const catalogAddons = product?.id ? this.dependencies.catalogService.listAddons(product.id) : [];
+        const availableAddons = catalogAddons.length > 0 ? catalogAddons : (product?.addons ?? []);
+        const availableAddonCodes = new Set(availableAddons.map((addon) => addon.code));
+        const defaultPlan = this.getDefaultPlan(product);
+        const planCode = String(rawState?.planCode ?? "").trim();
+        const validPlanCode = product?.plans?.some((plan) => plan.code === planCode) ? planCode : defaultPlan?.code ?? "";
+        const addonCodes = Array.isArray(rawState?.addonCodes)
+            ? rawState.addonCodes
+                .map((code) => String(code ?? "").trim())
+                .filter((code) => code && availableAddonCodes.has(code))
+            : [];
+        const step = String(rawState?.step ?? "plan").trim().toLowerCase();
+        return {
+            planCode: validPlanCode,
+            addonCodes: [...new Set(addonCodes)],
+            step: step === "addons" ? "addons" : "plan",
+        };
+    }
+    getCartInactivityDelayMs() {
+        const sales = this.dependencies.managerRuntimeConfigService.getResolvedSalesSettings();
+        return Math.min(5, Math.max(1, Number(sales.cartInactivityMinutes ?? 5))) * 60 * 1000;
+    }
+    getCartApprovedCloseDelayMs() {
+        return 5 * 60 * 1000;
+    }
+    getCartStateFromChannel(channel, product, message = null) {
+        const cachedState = this.getCachedCartState(channel, product);
+        if (cachedState) {
+            return cachedState;
+        }
+        const parsedAddons = String(parseDelimitedTopicValue(channel?.topic, "addons") ?? "")
+            .split(",")
+            .map((item) => item.trim())
+            .filter(Boolean);
+        const selectedAddonCodesFromMessage = this.getSelectedAddonCodesFromCartMessage(message, product);
+        const state = this.normalizeCartState({
+            planCode: parseDelimitedTopicValue(channel?.topic, "plan"),
+            addonCodes: selectedAddonCodesFromMessage.length > 0 ? selectedAddonCodesFromMessage : parsedAddons,
+            step: parseDelimitedTopicValue(channel?.topic, "step"),
+        }, product);
+        const parsedActivityAt = Number(parseDelimitedTopicValue(channel?.topic, "activity") ?? 0) || Date.now();
+        this.cacheCartState(channel, null, product, state, parsedActivityAt);
+        return state;
+    }
+    buildCartTopic(user, product, state, activityAt = Date.now()) {
+        const safeUsername = String(user?.username ?? user?.globalName ?? user?.id ?? "cliente").replace(/[|]/gu, "").trim() || "cliente";
+        const addonSegment = Array.isArray(state?.addonCodes) && state.addonCodes.length > 0 ? state.addonCodes.join(",") : "none";
+        return [
+            `Carrinho de Compras do ${safeUsername}`,
+            `user:${user?.id ?? ""}`,
+            `product:${product?.slug ?? ""}`,
+            `plan:${state?.planCode ?? ""}`,
+            `addons:${addonSegment}`,
+            `step:${state?.step ?? "plan"}`,
+            `activity:${Math.max(1, Number(activityAt) || Date.now())}`,
+        ].join(" | ").slice(0, 1024);
+    }
+    async persistCartState(channel, user, product, rawState) {
+        const state = this.normalizeCartState(rawState, product);
+        const activityAt = Date.now();
+        this.cacheCartState(channel, user, product, state, activityAt);
+        this.scheduleCartTopicSync(channel, user, product, state, activityAt);
+        this.scheduleCartInactivityTimeout(channel, user, product, state, activityAt);
+        return state;
+    }
+    getCachedCartState(channel, product) {
+        const channelId = String(channel?.id ?? "").trim();
+        if (!channelId) {
+            return null;
+        }
+        const cached = this.cartStateCache.get(channelId);
+        if (!cached) {
+            return null;
+        }
+        const cachedProductSlug = String(cached.productSlug ?? "").trim();
+        if (product?.slug && cachedProductSlug && cachedProductSlug !== String(product.slug).trim()) {
+            return null;
+        }
+        return this.normalizeCartState(cached.state, product);
+    }
+    cacheCartState(channel, user, product, state, updatedAt = Date.now()) {
+        const channelId = String(channel?.id ?? "").trim();
+        if (!channelId) {
+            return;
+        }
+        this.cartStateCache.set(channelId, {
+            userId: String(user?.id ?? "").trim() || null,
+            productSlug: String(product?.slug ?? "").trim() || null,
+            state: this.normalizeCartState(state, product),
+            updatedAt,
+        });
+    }
+    clearCartRuntimeState(channelId) {
+        const normalizedChannelId = String(channelId ?? "").trim();
+        if (!normalizedChannelId) {
+            return;
+        }
+        const existingTopicTimer = this.cartTopicSyncTimers.get(normalizedChannelId);
+        if (existingTopicTimer) {
+            clearTimeout(existingTopicTimer);
+            this.cartTopicSyncTimers.delete(normalizedChannelId);
+        }
+        const existingInactivityTimer = this.cartInactivityTimers.get(normalizedChannelId);
+        if (existingInactivityTimer) {
+            clearTimeout(existingInactivityTimer);
+            this.cartInactivityTimers.delete(normalizedChannelId);
+        }
+        const existingApprovedTimer = this.cartApprovedTimers.get(normalizedChannelId);
+        if (existingApprovedTimer) {
+            clearTimeout(existingApprovedTimer);
+            this.cartApprovedTimers.delete(normalizedChannelId);
+        }
+        this.cartStateCache.delete(normalizedChannelId);
+    }
+    scheduleCartTopicSync(channel, user, product, state, activityAt = null) {
+        const channelId = String(channel?.id ?? "").trim();
+        if (!channelId || typeof channel?.setTopic !== "function") {
+            return;
+        }
+        const existingTimer = this.cartTopicSyncTimers.get(channelId);
+        if (existingTimer) {
+            clearTimeout(existingTimer);
+        }
+        const timer = setTimeout(() => {
+            this.cartTopicSyncTimers.delete(channelId);
+            void this.syncCartTopic(channel, user, product, state, activityAt);
+        }, 1500);
+        timer.unref?.();
+        this.cartTopicSyncTimers.set(channelId, timer);
+    }
+    scheduleCartInactivityTimeout(channel, user, product, state, activityAt = Date.now()) {
+        const channelId = String(channel?.id ?? "").trim();
+        if (!channelId) {
+            return;
+        }
+        const existingTimer = this.cartInactivityTimers.get(channelId);
+        if (existingTimer) {
+            clearTimeout(existingTimer);
+        }
+        const delayMs = this.getCartInactivityDelayMs();
+        const elapsedMs = Math.max(0, Date.now() - Math.max(1, Number(activityAt) || Date.now()));
+        const remainingMs = Math.max(1000, delayMs - elapsedMs);
+        const timer = setTimeout(() => {
+            this.cartInactivityTimers.delete(channelId);
+            void this.handleCartInactivityTimeout(channelId, Math.max(1, Number(activityAt) || Date.now()));
+        }, remainingMs);
+        timer.unref?.();
+        this.cartInactivityTimers.set(channelId, timer);
+    }
+    async markCartChannelApproved(channel, approvedAt = Date.now()) {
+        if (!channel || typeof channel.setTopic !== "function") {
+            return;
+        }
+        const normalizedApprovedAt = Math.max(1, Number(approvedAt) || Date.now());
+        const nextTopic = upsertDelimitedTopicValue(String(channel.topic ?? "").trim(), "approved", String(normalizedApprovedAt));
+        if (String(channel.topic ?? "") === nextTopic) {
+            return;
+        }
+        try {
+            await channel.setTopic(nextTopic);
+            channel.topic = nextTopic;
+        }
+        catch (error) {
+            this.logger.warn({
+                channelId: String(channel?.id ?? "").trim() || null,
+                error: error?.message ?? String(error),
+            }, "Falha ao marcar o carrinho como aprovado no topic.");
+        }
+    }
+    scheduleCartApprovedClosure(channel, approvedAt = Date.now()) {
+        const channelId = String(channel?.id ?? "").trim();
+        if (!channelId) {
+            return;
+        }
+        const existingTopicTimer = this.cartTopicSyncTimers.get(channelId);
+        if (existingTopicTimer) {
+            clearTimeout(existingTopicTimer);
+            this.cartTopicSyncTimers.delete(channelId);
+        }
+        const existingInactivityTimer = this.cartInactivityTimers.get(channelId);
+        if (existingInactivityTimer) {
+            clearTimeout(existingInactivityTimer);
+            this.cartInactivityTimers.delete(channelId);
+        }
+        const existingTimer = this.cartApprovedTimers.get(channelId);
+        if (existingTimer) {
+            clearTimeout(existingTimer);
+        }
+        const delayMs = this.getCartApprovedCloseDelayMs();
+        const elapsedMs = Math.max(0, Date.now() - Math.max(1, Number(approvedAt) || Date.now()));
+        const remainingMs = Math.max(1000, delayMs - elapsedMs);
+        const timer = setTimeout(() => {
+            this.cartApprovedTimers.delete(channelId);
+            void this.handleCartApprovedClosureTimeout(channelId, Math.max(1, Number(approvedAt) || Date.now()));
+        }, remainingMs);
+        timer.unref?.();
+        this.cartApprovedTimers.set(channelId, timer);
+    }
+    async handleCartApprovedClosureTimeout(channelId, scheduledAt) {
+        const fetchedChannel = this.client?.channels?.cache?.get(channelId) ??
+            (channelId ? await this.client?.channels.fetch(channelId).catch(() => null) : null);
+        if (!fetchedChannel || fetchedChannel.type !== discord_js_1.ChannelType.GuildText) {
+            this.clearCartRuntimeState(channelId);
+            return;
+        }
+        const approvedAt = Number(parseDelimitedTopicValue(fetchedChannel.topic, "approved") ?? 0);
+        if (approvedAt > scheduledAt) {
+            this.scheduleCartApprovedClosure(fetchedChannel, approvedAt);
+            return;
+        }
+        this.clearCartRuntimeState(channelId);
+        if (fetchedChannel.deletable) {
+            await fetchedChannel.delete("Carrinho fechado 5 minutos apos o pagamento aprovado.").catch(() => null);
+            return;
+        }
+        const latestMessages = await fetchedChannel.messages.fetch({ limit: 5 }).catch(() => null);
+        const ownerUserId = String(parseDelimitedTopicValue(fetchedChannel.topic, "user") ?? "").trim();
+        const productSlug = String(parseDelimitedTopicValue(fetchedChannel.topic, "product") ?? "").trim();
+        const cartMessage = productSlug ? this.findCartMessage(latestMessages, ownerUserId, productSlug) : null;
+        await cartMessage?.edit({
+            content: "Carrinho encerrado automaticamente 5 minuto(s) apos o pagamento aprovado.",
+            embeds: [],
+            components: [],
+            attachments: [],
+            files: [],
+        }).catch(() => null);
+    }
+    async handleCartInactivityTimeout(channelId, scheduledAt) {
+        const cached = this.cartStateCache.get(channelId);
+        if (cached && Number(cached.updatedAt ?? 0) > scheduledAt) {
+            this.scheduleCartInactivityTimeout({ id: channelId }, { id: cached.userId ?? "" }, { slug: cached.productSlug ?? "" }, cached.state, Number(cached.updatedAt));
+            return;
+        }
+        const fetchedChannel = this.client?.channels?.cache?.get(channelId) ??
+            (channelId ? await this.client?.channels.fetch(channelId).catch(() => null) : null);
+        if (!fetchedChannel || fetchedChannel.type !== discord_js_1.ChannelType.GuildText) {
+            this.clearCartRuntimeState(channelId);
+            return;
+        }
+        const ownerUserId = String(cached?.userId ?? parseDelimitedTopicValue(fetchedChannel.topic, "user") ?? "").trim();
+        const productSlug = String(cached?.productSlug ?? parseDelimitedTopicValue(fetchedChannel.topic, "product") ?? "").trim();
+        const product = this.getResolvedProductBySlug(productSlug) ?? this.getPrimaryProduct();
+        if (product) {
+            const state = this.getCartStateFromChannel(fetchedChannel, product);
+            await this.logSalesEvent({
+                type: "cart_closed_inactive",
+                userId: ownerUserId || null,
+                channelId,
+                productName: product.name,
+                planName: this.getCartSelectedPlan(product, state)?.name ?? null,
+                amountCents: this.calculateCartTotalCents(product, state),
+                currency: this.getCartSelectedPlan(product, state)?.currency ?? "BRL",
+                addons: this.getSelectedAddonLogEntries(product, state),
+                note: `Carrinho fechado automaticamente apos ${Math.max(1, Number(this.dependencies.managerRuntimeConfigService.getResolvedSalesSettings().cartInactivityMinutes ?? 5))} minuto(s) sem atividade.`,
+            });
+        }
+        this.clearCartRuntimeState(channelId);
+        if (fetchedChannel.deletable) {
+            await fetchedChannel.delete("Carrinho fechado por inatividade.").catch(() => null);
+            return;
+        }
+        const latestMessages = await fetchedChannel.messages.fetch({ limit: 5 }).catch(() => null);
+        const cartMessage = product ? this.findCartMessage(latestMessages, ownerUserId, product.slug) : null;
+        await cartMessage?.edit({
+            content: `Carrinho fechado automaticamente por inatividade apos ${Math.max(1, Number(this.dependencies.managerRuntimeConfigService.getResolvedSalesSettings().cartInactivityMinutes ?? 5))} minuto(s).`,
+            embeds: [],
+            components: [],
+        }).catch(() => null);
+    }
+    async rehydrateExistingCartTimers() {
+        if (!this.client) {
+            return;
+        }
+        for (const timer of this.cartInactivityTimers.values()) {
+            clearTimeout(timer);
+        }
+        this.cartInactivityTimers.clear();
+        for (const timer of this.cartApprovedTimers.values()) {
+            clearTimeout(timer);
+        }
+        this.cartApprovedTimers.clear();
+        for (const guild of this.client.guilds.cache.values()) {
+            const channels = await guild.channels.fetch().catch(() => null);
+            for (const channel of channels?.values() ?? []) {
+                if (!channel || channel.type !== discord_js_1.ChannelType.GuildText) {
+                    continue;
+                }
+                if (!String(channel.topic ?? "").includes("user:")) {
+                    continue;
+                }
+                const approvedAt = Number(parseDelimitedTopicValue(channel.topic, "approved") ?? 0);
+                if (approvedAt > 0) {
+                    this.scheduleCartApprovedClosure(channel, approvedAt);
+                    continue;
+                }
+                const productSlug = String(parseDelimitedTopicValue(channel.topic, "product") ?? "").trim();
+                const userId = String(parseDelimitedTopicValue(channel.topic, "user") ?? "").trim();
+                const product = this.getResolvedProductBySlug(productSlug) ?? this.getPrimaryProduct();
+                if (!product || !userId) {
+                    continue;
+                }
+                const state = this.getCartStateFromChannel(channel, product);
+                const activityAt = Number(parseDelimitedTopicValue(channel.topic, "activity") ?? channel.createdTimestamp ?? Date.now()) || Date.now();
+                this.cacheCartState(channel, { id: userId }, product, state, activityAt);
+                this.scheduleCartInactivityTimeout(channel, { id: userId }, product, state, activityAt);
+            }
+        }
+    }
+    async syncCartTopic(channel, user, product, state, activityAt = null) {
+        const resolvedActivityAt = Math.max(1, Number(activityAt ?? this.cartStateCache.get(String(channel?.id ?? "").trim())?.updatedAt ?? Date.now()) || Date.now());
+        const currentTopic = String(channel?.topic ?? "");
+        const approvedAt = Number(parseDelimitedTopicValue(currentTopic, "approved") ?? 0);
+        let nextTopic = this.buildCartTopic(user, product, state, resolvedActivityAt);
+        if (approvedAt > 0) {
+            nextTopic = upsertDelimitedTopicValue(nextTopic, "approved", String(approvedAt));
+        }
+        if (String(channel?.topic ?? "") === nextTopic) {
+            return;
+        }
+        try {
+            await channel.setTopic(nextTopic);
+            channel.topic = nextTopic;
+        }
+        catch (error) {
+            const message = String(error?.message ?? error ?? "").toLowerCase();
+            if (!message.includes("rate limit") && !message.includes("too many requests") && !message.includes("429")) {
+                this.logger.warn({
+                    channelId: String(channel?.id ?? "").trim() || null,
+                    error: error?.message ?? String(error),
+                }, "Falha ao sincronizar o topic do carrinho.");
+            }
+        }
+    }
+    getSelectedAddonLogEntries(product, state) {
+        return this.getCartSelectedAddons(product, state).map((addon) => ({
+            code: addon.code,
+            name: addon.name,
+            priceCents: addon.priceCents,
+            currency: addon.currency ?? "BRL",
+        }));
+    }
+    async logSalesEvent(event) {
+        if (typeof this.dependencies.salesLogService?.log !== "function") {
+            return false;
+        }
+        try {
+            return await this.dependencies.salesLogService.log(event);
+        }
+        catch (error) {
+            this.logger.warn({
+                error: error?.message ?? String(error),
+                type: event?.type ?? "unknown",
+            }, "Falha ao registrar log privado de vendas.");
+            return false;
+        }
+    }
+    getSelectedAddonCodesFromCartMessage(message, product) {
+        const productSlug = String(product?.slug ?? "").trim();
+        if (!message?.components?.length || !productSlug) {
+            return [];
+        }
+        const selected = new Set();
+        for (const row of message.components) {
+            for (const component of row?.components ?? []) {
+                const customId = String(component?.customId ?? component?.custom_id ?? "").trim();
+                const style = Number(component?.style ?? 0);
+                if (customId.startsWith(CUSTOM_IDS.cartAddonBioPrefix) && customId.endsWith(`:${productSlug}`) && style === discord_js_1.ButtonStyle.Success) {
+                    selected.add("custom-bio");
+                }
+            }
+        }
+        return [...selected];
+    }
+    getCartSelectedPlan(product, state) {
+        return product?.plans?.find((plan) => plan.code === state?.planCode) ?? this.getDefaultPlan(product);
+    }
+    getCartSelectedAddons(product, state) {
+        const selectedCodes = new Set(Array.isArray(state?.addonCodes) ? state.addonCodes : []);
+        const catalogAddons = product?.id ? this.dependencies.catalogService.listAddons(product.id) : [];
+        const availableAddons = catalogAddons.length > 0 ? catalogAddons : (product?.addons ?? []);
+        return availableAddons.filter((addon) => selectedCodes.has(addon.code));
+    }
+    calculateCartTotalCents(product, state) {
+        const plan = this.getCartSelectedPlan(product, state);
+        const addons = this.getCartSelectedAddons(product, state);
+        const baseAmount = Number(plan?.priceCents ?? 0);
+        return baseAmount + addons.reduce((total, addon) => total + Number(addon?.priceCents ?? 0), 0);
+    }
+    findCartMessage(existingMessages, ownerUserId, productSlug) {
+        const expectedFragments = [
+            `${CUSTOM_IDS.buyPlanSelectCartPrefix}${ownerUserId}:${productSlug}`,
+            `${CUSTOM_IDS.cartContinuePrefix}${ownerUserId}:${productSlug}`,
+            `${CUSTOM_IDS.cartPaymentPrefix}${ownerUserId}:${productSlug}`,
+        ];
+        return existingMessages?.find((message) => message.author?.id === this.client?.user?.id &&
+            message.components?.some((row) => row.components?.some((component) => expectedFragments.some((fragment) => String(component.customId ?? "").startsWith(fragment))))) ?? null;
+    }
     getPrimaryProduct() {
         return this.dependencies.catalogService.listProducts()[0] ?? null;
     }
@@ -1477,11 +5715,7 @@ class ManagerBotService {
         if (String(subscription.commercialOwnerDiscordUserId ?? "").trim() === userId) {
             return true;
         }
-        const customer = this.dependencies.store.customers.find((entry) => entry.id === subscription.customerId);
-        if (String(customer?.discordUserId ?? "").trim() === userId) {
-            return true;
-        }
-        return String(instance.config?.ownerDiscordUserId ?? "").trim() === userId;
+        return false;
     }
     hasAdminAccess(target) {
         const access = this.dependencies.managerRuntimeConfigService.getResolvedAccessControl();
@@ -1557,12 +5791,140 @@ class ManagerBotService {
             }
         }
     }
+    cleanupTrackedAdminPanels() {
+        const now = Date.now();
+        for (const [userId, tracked] of this.trackedAdminPanels.entries()) {
+            if ((tracked?.createdAt ?? 0) + ADMIN_PANEL_TRACK_TTL_MS <= now) {
+                this.trackedAdminPanels.delete(userId);
+            }
+        }
+    }
+    cleanupTrackedAppsPanels() {
+        const now = Date.now();
+        for (const [userId, tracked] of this.trackedAppsPanels.entries()) {
+            if ((tracked?.createdAt ?? 0) + APPS_PANEL_TRACK_TTL_MS <= now) {
+                this.trackedAppsPanels.delete(userId);
+            }
+        }
+    }
+    rememberAdminPanelInteraction(interaction) {
+        const userId = String(interaction?.user?.id ?? "").trim();
+        if (!userId) {
+            return;
+        }
+        this.cleanupTrackedAdminPanels();
+        this.trackedAdminPanels.set(userId, {
+            createdAt: Date.now(),
+            sourceInteraction: interaction,
+            channelId: interaction?.channelId ?? null,
+            messageId: interaction?.message?.id ?? null,
+        });
+    }
+    rememberAppsPanelInteraction(interaction) {
+        const userId = String(interaction?.user?.id ?? "").trim();
+        if (!userId) {
+            return;
+        }
+        this.cleanupTrackedAppsPanels();
+        this.trackedAppsPanels.set(userId, {
+            createdAt: Date.now(),
+            sourceInteraction: interaction,
+            channelId: interaction?.channelId ?? null,
+            messageId: interaction?.message?.id ?? null,
+        });
+    }
+    async tryUpdateTrackedAdminPanel(userId, payload) {
+        const normalizedUserId = String(userId ?? "").trim();
+        if (!normalizedUserId) {
+            return false;
+        }
+        this.cleanupTrackedAdminPanels();
+        const tracked = this.trackedAdminPanels.get(normalizedUserId);
+        if (!tracked) {
+            return false;
+        }
+        try {
+            if (tracked.sourceInteraction && typeof tracked.sourceInteraction.editReply === "function") {
+                await tracked.sourceInteraction.editReply(payload);
+                return true;
+            }
+        }
+        catch {
+        }
+        try {
+            if (tracked.sourceInteraction?.webhook && typeof tracked.sourceInteraction.webhook.editMessage === "function") {
+                await tracked.sourceInteraction.webhook.editMessage("@original", payload);
+                return true;
+            }
+        }
+        catch {
+        }
+        return false;
+    }
+    async tryUpdateTrackedAppsPanel(userId, payload) {
+        const normalizedUserId = String(userId ?? "").trim();
+        if (!normalizedUserId) {
+            return false;
+        }
+        this.cleanupTrackedAppsPanels();
+        const tracked = this.trackedAppsPanels.get(normalizedUserId);
+        if (!tracked) {
+            return false;
+        }
+        try {
+            if (tracked.sourceInteraction && typeof tracked.sourceInteraction.editReply === "function") {
+                await tracked.sourceInteraction.editReply(payload);
+                return true;
+            }
+        }
+        catch {
+        }
+        try {
+            if (tracked.sourceInteraction?.webhook && typeof tracked.sourceInteraction.webhook.editMessage === "function") {
+                await tracked.sourceInteraction.webhook.editMessage("@original", payload);
+                return true;
+            }
+        }
+        catch {
+        }
+        return false;
+    }
+    async updateTrackedAppsPanelReply(userId, payload) {
+        const updated = await this.tryUpdateTrackedAppsPanel(userId, payload);
+        if (updated) {
+            return true;
+        }
+        return false;
+    }
+    async updateAppsModalReply(interaction, payload) {
+        const updated = await this.tryUpdateTrackedAppsPanel(interaction.user.id, payload);
+        if (updated) {
+            await interaction.deleteReply().catch(() => null);
+            return;
+        }
+        await interaction.editReply(payload).catch(() => null);
+    }
     countByStatus(statuses) {
         return statuses.reduce((accumulator, status) => {
             const key = String(status ?? "unknown");
             accumulator[key] = (accumulator[key] ?? 0) + 1;
             return accumulator;
         }, {});
+    }
+    canManageSubscription(userId, subscription) {
+        const normalizedUserId = String(userId ?? "").trim();
+        if (!normalizedUserId || !subscription) {
+            return false;
+        }
+        if (this.hasAdminAccess({ user: { id: normalizedUserId } })) {
+            return true;
+        }
+        const commercialOwnerDiscordUserId = String(subscription.commercialOwnerDiscordUserId ?? "").trim();
+        if (commercialOwnerDiscordUserId) {
+            return commercialOwnerDiscordUserId === normalizedUserId;
+        }
+        const customer = this.dependencies.store.customers.find((entry) => entry.id === subscription.customerId);
+        return String(customer?.discordUserId ?? "").trim() === normalizedUserId;
     }
     getStatusLabel(status) {
         return STATUS_LABELS[String(status ?? "").toLowerCase()] ?? status ?? "desconhecido";
@@ -1597,11 +5959,173 @@ class ManagerBotService {
         }
         return `<t:${timestamp}:R>`;
     }
+    getNestedValue(source, path) {
+        const segments = String(path ?? "")
+            .split(".")
+            .map((segment) => segment.trim())
+            .filter(Boolean);
+        let current = source;
+        for (const segment of segments) {
+            if (!current || typeof current !== "object" || !(segment in current)) {
+                return undefined;
+            }
+            current = current[segment];
+        }
+        return current;
+    }
+    pickNestedValue(source, candidates) {
+        for (const candidate of candidates) {
+            const value = this.getNestedValue(source, candidate);
+            if (value !== undefined && value !== null && value !== "") {
+                return value;
+            }
+        }
+        return undefined;
+    }
+    formatHumanBytes(value) {
+        const numericValue = Number(value);
+        if (!Number.isFinite(numericValue) || numericValue < 0) {
+            return "--";
+        }
+        if (numericValue === 0) {
+            return "0 B";
+        }
+        const units = ["B", "KB", "MB", "GB", "TB"];
+        const exponent = Math.min(Math.floor(Math.log(numericValue) / Math.log(1024)), units.length - 1);
+        const scaled = numericValue / Math.pow(1024, exponent);
+        return `${scaled.toFixed(scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2)}${units[exponent]}`;
+    }
+    formatAppsPercent(value) {
+        if (typeof value === "string" && value.trim()) {
+            return value.includes("%") ? value.trim() : `${value.trim()}%`;
+        }
+        const numericValue = Number(value);
+        if (!Number.isFinite(numericValue)) {
+            return "0.00%";
+        }
+        return `${numericValue.toFixed(2)}%`;
+    }
+    formatAppsUsage(rawValue, usedValue, limitValue) {
+        if (typeof rawValue === "string" && rawValue.trim()) {
+            return rawValue.trim();
+        }
+        if (rawValue && typeof rawValue === "object") {
+            const nestedUsed = this.pickNestedValue(rawValue, ["used", "usage", "current"]);
+            const nestedLimit = this.pickNestedValue(rawValue, ["limit", "total", "max"]);
+            if (nestedUsed !== undefined || nestedLimit !== undefined) {
+                return `${this.formatHumanBytes(nestedUsed ?? 0)}/${this.formatHumanBytes(nestedLimit ?? 0)}`;
+            }
+        }
+        const usedNumber = Number(usedValue);
+        const limitNumber = Number(limitValue);
+        if (Number.isFinite(usedNumber) && Number.isFinite(limitNumber) && limitNumber > 0) {
+            return `${this.formatHumanBytes(usedNumber)}/${this.formatHumanBytes(limitNumber)}`;
+        }
+        const rawNumber = Number(rawValue);
+        if (Number.isFinite(rawNumber) && rawNumber > 0) {
+            return this.formatHumanBytes(rawNumber);
+        }
+        return "--";
+    }
+    formatAppsUptime(value) {
+        if (typeof value === "string" && value.trim()) {
+            const parsedDate = Date.parse(value);
+            if (!Number.isNaN(parsedDate)) {
+                return this.formatAppsUptime(Math.max(0, Math.floor((Date.now() - parsedDate) / 1000)));
+            }
+            return value.trim();
+        }
+        const numericValue = Number(value);
+        if (!Number.isFinite(numericValue) || numericValue < 0) {
+            return "--";
+        }
+        const totalSeconds = numericValue > 1_000_000_000 ? Math.floor(numericValue / 1000) : Math.floor(numericValue);
+        const days = Math.floor(totalSeconds / 86400);
+        const hours = Math.floor((totalSeconds % 86400) / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        if (days > 0) {
+            return `ha ${days}d ${hours}h`;
+        }
+        if (hours > 0) {
+            return `ha ${hours}h ${minutes}m`;
+        }
+        return `ha ${Math.max(1, minutes)}m`;
+    }
+    extractAppsOverviewMetrics(instance, overview) {
+        const info = overview?.info ?? {};
+        const status = overview?.status ?? {};
+        const rawStatus = this.pickNestedValue(status, ["status", "state", "running", "currentStatus"]) ??
+            this.pickNestedValue(info, ["status", "state", "running"]);
+        let statusLabel = instance ? this.getStatusLabel(instance.status) : "nao disponivel";
+        if (typeof rawStatus === "boolean") {
+            statusLabel = rawStatus ? "Em execucao" : "Desligada";
+        }
+        else if (typeof rawStatus === "number") {
+            statusLabel = rawStatus > 0 ? "Em execucao" : "Desligada";
+        }
+        else if (typeof rawStatus === "string" && rawStatus.trim()) {
+            statusLabel = rawStatus.trim();
+        }
+        return {
+            status: statusLabel,
+            cpu: this.formatAppsPercent(this.pickNestedValue(status, ["cpu", "cpuUsage", "usage.cpu", "usage.cpuUsage", "stats.cpu"])),
+            ram: this.formatAppsUsage(this.pickNestedValue(status, ["ram", "memory", "stats.ram", "stats.memory"]), this.pickNestedValue(status, ["ram.used", "memory.used", "usage.ram.used", "usage.memory.used", "stats.ram.used", "stats.memory.used"]), this.pickNestedValue(status, ["ram.total", "ram.limit", "memory.total", "memory.limit", "usage.ram.total", "usage.memory.total", "stats.ram.total", "stats.memory.total"])),
+            ssd: this.formatAppsUsage(this.pickNestedValue(info, ["ssd", "storage", "disk", "stats.ssd", "stats.storage"]), this.pickNestedValue(info, ["ssd.used", "storage.used", "disk.used", "stats.ssd.used"]), this.pickNestedValue(info, ["ssd.total", "ssd.limit", "storage.total", "storage.limit", "disk.total", "disk.limit", "stats.ssd.total"])),
+            networkTotal: this.formatAppsUsage(this.pickNestedValue(status, ["network.total", "networkTotal", "usage.network.total", "stats.network.total"])),
+            networkNow: this.formatAppsUsage(this.pickNestedValue(status, ["network.now", "networkNow", "usage.network.now", "stats.network.now"])),
+            uptime: this.formatAppsUptime(this.pickNestedValue(status, ["uptime", "uptimeSeconds", "stats.uptime", "runningFor"]) ??
+                this.pickNestedValue(info, ["uptime", "uptimeSeconds", "stats.uptime", "runningFor"])),
+            error: String(overview?.error ?? "").trim() || null,
+        };
+    }
+    async syncManagedInstanceRuntime(instance, discordApp) {
+        if (!instance || !discordApp) {
+            return false;
+        }
+        if (!this.dependencies.squareCloudProvisioningService ||
+            !this.dependencies.squareCloudClient?.isConfigured?.() ||
+            !instance.hostingAppId ||
+            String(instance.hostingAppId).startsWith("pending-")) {
+            return false;
+        }
+        const runtimeOptions = this.dependencies.sourceArtifactService.getRuntimeOptions(instance.sourceSlug, {
+            displayName: discordApp.appName,
+        });
+        const envs = this.dependencies.squareCloudProvisioningService.buildRuntimeEnv({
+            appId: instance.hostingAppId,
+            discordApp,
+            instance,
+            runtimeOptions,
+        });
+        await this.dependencies.squareCloudClient.setAppEnvVars(instance.hostingAppId, envs);
+        await this.dependencies.squareCloudClient.restartApp(instance.hostingAppId);
+        instance.status = "running";
+        instance.updatedAt = new Date().toISOString();
+        return true;
+    }
     limitMessageSize(content, maxLength = 1900) {
         const normalized = String(content ?? "");
         return normalized.length <= maxLength ? normalized : `${normalized.slice(0, maxLength - 3)}...`;
     }
     async replyEphemeral(interaction, payload) {
+        const normalizedPayload = typeof payload === "string"
+            ? {
+                content: this.limitMessageSize(payload),
+                flags: discord_js_1.MessageFlags.Ephemeral,
+            }
+            : {
+                ...payload,
+                content: payload?.content ? this.limitMessageSize(payload.content) : payload?.content,
+                flags: discord_js_1.MessageFlags.Ephemeral,
+            };
+        if (interaction.deferred) {
+            await interaction.editReply(normalizedPayload);
+            return;
+        }
+        if (interaction.replied) {
+            await interaction.followUp(normalizedPayload);
+            return;
+        }
         if (typeof payload === "string") {
             await interaction.reply({
                 content: this.limitMessageSize(payload),
@@ -1609,11 +6133,7 @@ class ManagerBotService {
             });
             return;
         }
-        await interaction.reply({
-            ...payload,
-            content: payload?.content ? this.limitMessageSize(payload.content) : payload?.content,
-            flags: discord_js_1.MessageFlags.Ephemeral,
-        });
+        await interaction.reply(normalizedPayload);
     }
     async safeReply(interaction, content) {
         const payload = {

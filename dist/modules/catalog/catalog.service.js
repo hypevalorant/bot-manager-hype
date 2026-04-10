@@ -2,6 +2,25 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.CatalogService = void 0;
 const utils_js_1 = require("../../core/utils.js");
+function normalizeEmbedColorInput(value) {
+    const normalized = String(value ?? "")
+        .trim()
+        .replace(/^#/u, "")
+        .replace(/^0x/iu, "");
+    if (!normalized) {
+        return null;
+    }
+    if (!/^(?:[\da-fA-F]{3}|[\da-fA-F]{6})$/u.test(normalized)) {
+        return null;
+    }
+    const expanded = normalized.length === 3
+        ? normalized
+            .split("")
+            .map((character) => `${character}${character}`)
+            .join("")
+        : normalized;
+    return `#${expanded.toUpperCase()}`;
+}
 const STANDARD_PLAN_BLUEPRINTS = [
     {
         code: "weekly",
@@ -68,6 +87,28 @@ class CatalogService {
     store;
     constructor(store) {
         this.store = store;
+        this.ensureDefaultAddonsForAllProducts();
+    }
+    normalizePanelConfig(input = {}, fallback = {}) {
+        const source = input && typeof input === "object" ? input : {};
+        const base = fallback && typeof fallback === "object" ? fallback : {};
+        return {
+            title: String(source.title ?? base.title ?? "").trim() || null,
+            summary: String(source.summary ?? base.summary ?? "").trim() || null,
+            details: String(source.details ?? base.details ?? "").trim() || null,
+            imageUrl: String(source.imageUrl ?? base.imageUrl ?? "").trim() || null,
+            embedColor: normalizeEmbedColorInput(source.embedColor ?? base.embedColor),
+            previewUrl: String(source.previewUrl ?? base.previewUrl ?? "").trim() || null,
+            buttonLabel: String(source.buttonLabel ?? base.buttonLabel ?? "").trim() || null,
+            pricePrefix: String(source.pricePrefix ?? base.pricePrefix ?? "").trim() || null,
+            footerText: String(source.footerText ?? base.footerText ?? "").trim() || null,
+            approvedTitle: String(source.approvedTitle ?? base.approvedTitle ?? "").trim() || null,
+            approvedDescription: String(source.approvedDescription ?? base.approvedDescription ?? "").trim() || null,
+            approvedImageUrl: String(source.approvedImageUrl ?? base.approvedImageUrl ?? "").trim() || null,
+            approvedEmbedColor: normalizeEmbedColorInput(source.approvedEmbedColor ?? base.approvedEmbedColor),
+            publishedChannelId: String(source.publishedChannelId ?? base.publishedChannelId ?? "").trim() || null,
+            publishedMessageId: String(source.publishedMessageId ?? base.publishedMessageId ?? "").trim() || null,
+        };
     }
     listProducts() {
         return this.store.products.map((product) => ({
@@ -113,9 +154,12 @@ class CatalogService {
                 ? input.requiredPrivilegedIntents
                 : ["guild_presences", "guild_members", "message_content"],
             tutorialUrl: String(input.tutorialUrl ?? "").trim() || null,
+            customerRoleId: String(input.customerRoleId ?? "").trim() || null,
+            panelConfig: this.normalizePanelConfig(input.panelConfig),
         };
         this.store.products.push(product);
         this.upsertStandardPlans(product.id, input.planPrices ?? {});
+        this.ensureDefaultProductAddons(product.id);
         return this.getProductBySlug(slug);
     }
     updateProduct(slug, input = {}) {
@@ -140,6 +184,12 @@ class CatalogService {
         }
         if (input.tutorialUrl !== undefined) {
             product.tutorialUrl = String(input.tutorialUrl ?? "").trim() || null;
+        }
+        if (input.customerRoleId !== undefined) {
+            product.customerRoleId = String(input.customerRoleId ?? "").trim() || null;
+        }
+        if (input.panelConfig !== undefined) {
+            product.panelConfig = this.normalizePanelConfig(input.panelConfig, product.panelConfig);
         }
         if (Array.isArray(input.requiredPrivilegedIntents) && input.requiredPrivilegedIntents.length > 0) {
             product.requiredPrivilegedIntents = input.requiredPrivilegedIntents;
@@ -166,6 +216,62 @@ class CatalogService {
                 productId,
                 ...blueprint,
                 priceCents: nextPriceCents,
+            });
+        }
+    }
+    ensureDefaultAddonsForAllProducts() {
+        for (const product of this.store.products) {
+            if (!product?.id) {
+                continue;
+            }
+            this.ensureDefaultProductAddons(product.id);
+        }
+    }
+    ensureDefaultProductAddons(productId) {
+        const defaults = [
+            {
+                code: "custom-bio",
+                name: "Bio Personalizada",
+                description: "Adiciona bio personalizada ao bot do cliente.",
+                priceCents: 1000,
+                currency: "BRL",
+                informationalOnly: false,
+            },
+            {
+                code: "auto-restart",
+                name: "AutoRestart",
+                description: "O bot ja reinicia automaticamente em caso de erro.",
+                priceCents: 0,
+                currency: "BRL",
+                informationalOnly: true,
+            },
+            {
+                code: "custom-qr",
+                name: "QrCode Personalizado",
+                description: "O QR Code personalizado ja faz parte do pacote, sem custo extra.",
+                priceCents: 0,
+                currency: "BRL",
+                informationalOnly: true,
+            },
+            {
+                code: "priority-support",
+                name: "Suporte Prioritario",
+                description: "Nossa equipe permanece disponivel para ajudar, sem custo extra no momento.",
+                priceCents: 0,
+                currency: "BRL",
+                informationalOnly: true,
+            },
+        ];
+        for (const addon of defaults) {
+            const exists = this.store.productAddons.find((item) => item.productId === productId && item.code === addon.code);
+            if (exists) {
+                Object.assign(exists, addon);
+                continue;
+            }
+            this.store.productAddons.push({
+                id: (0, utils_js_1.makeId)(),
+                productId,
+                ...addon,
             });
         }
     }

@@ -169,6 +169,7 @@ class ManagerRuntimeConfigService {
         const defaults = (0, store_js_1.createEmptyManagerRuntimeConfig)();
         const current = this.store.managerRuntimeConfig;
         const access = current.access && typeof current.access === "object" ? current.access : {};
+        const sales = current.sales && typeof current.sales === "object" ? current.sales : {};
         const sources = current.sources && typeof current.sources === "object" ? current.sources : {};
         const billing = current.billing && typeof current.billing === "object" ? current.billing : {};
         const efipay = billing.efipay && typeof billing.efipay === "object" ? billing.efipay : {};
@@ -183,7 +184,21 @@ class ManagerRuntimeConfigService {
                 staffUserIds: normalizeIdList(access.staffUserIds),
                 staffRoleIds: normalizeIdList(access.staffRoleIds),
             },
-            sources,
+            sales: {
+                ...defaults.sales,
+                ...sales,
+                cartCategoryId: normalizeIdList(sales.cartCategoryId)[0] ?? null,
+                customerRoleId: normalizeIdList(sales.customerRoleId)[0] ?? null,
+                cartStaffRoleIds: normalizeIdList(sales.cartStaffRoleIds),
+                logsChannelId: normalizeIdList(sales.logsChannelId)[0] ?? null,
+                cartInactivityMinutes: Math.min(5, Math.max(1, normalizeOptionalNumber(sales.cartInactivityMinutes) ?? defaults.sales.cartInactivityMinutes)),
+                cartChannelNameTemplate: normalizeOptionalString(sales.cartChannelNameTemplate) ?? defaults.sales.cartChannelNameTemplate,
+                autoAssignCustomerRole: normalizeOptionalBoolean(sales.autoAssignCustomerRole) ?? defaults.sales.autoAssignCustomerRole,
+            },
+            sources: {
+                ...(defaults.sources && typeof defaults.sources === "object" ? defaults.sources : {}),
+                ...sources,
+            },
             billing: {
                 ...defaults.billing,
                 ...billing,
@@ -284,6 +299,45 @@ class ManagerRuntimeConfigService {
         access.staffRoleIds = [];
         runtimeState.updatedAt = (0, utils_js_1.nowIso)();
         return this.getResolvedAccessControl();
+    }
+    getResolvedSalesSettings() {
+        const sales = this.ensureState().sales;
+        return {
+            cartCategoryId: normalizeIdList(sales.cartCategoryId)[0] ?? null,
+            customerRoleId: normalizeIdList(sales.customerRoleId)[0] ?? null,
+            cartStaffRoleIds: normalizeIdList(sales.cartStaffRoleIds),
+            logsChannelId: normalizeIdList(sales.logsChannelId)[0] ?? null,
+            cartInactivityMinutes: Math.min(5, Math.max(1, normalizeOptionalNumber(sales.cartInactivityMinutes) ?? 5)),
+            cartChannelNameTemplate: normalizeOptionalString(sales.cartChannelNameTemplate) ?? "carrinho-{user}",
+            autoAssignCustomerRole: normalizeOptionalBoolean(sales.autoAssignCustomerRole) ?? true,
+        };
+    }
+    updateSalesSettings(input = {}) {
+        const runtimeState = this.ensureState();
+        const sales = runtimeState.sales;
+        if (input.cartCategoryId !== undefined) {
+            sales.cartCategoryId = normalizeIdList(input.cartCategoryId)[0] ?? null;
+        }
+        if (input.customerRoleId !== undefined) {
+            sales.customerRoleId = normalizeIdList(input.customerRoleId)[0] ?? null;
+        }
+        if (input.cartStaffRoleIds !== undefined) {
+            sales.cartStaffRoleIds = normalizeIdList(input.cartStaffRoleIds);
+        }
+        if (input.logsChannelId !== undefined) {
+            sales.logsChannelId = normalizeIdList(input.logsChannelId)[0] ?? null;
+        }
+        if (input.cartInactivityMinutes !== undefined) {
+            sales.cartInactivityMinutes = Math.min(5, Math.max(1, normalizeOptionalNumber(input.cartInactivityMinutes) ?? 5));
+        }
+        if (input.cartChannelNameTemplate !== undefined) {
+            sales.cartChannelNameTemplate = normalizeOptionalString(input.cartChannelNameTemplate) ?? "carrinho-{user}";
+        }
+        if (input.autoAssignCustomerRole !== undefined) {
+            sales.autoAssignCustomerRole = normalizeOptionalBoolean(input.autoAssignCustomerRole) ?? true;
+        }
+        runtimeState.updatedAt = (0, utils_js_1.nowIso)();
+        return this.getResolvedSalesSettings();
     }
     getRuntimeSourceConfig(sourceSlug) {
         const normalizedSlug = normalizeSourceSlug(sourceSlug);
@@ -493,6 +547,7 @@ class ManagerRuntimeConfigService {
             inferredRequestBaseUrl: this.inferRequestBaseUrl(request),
             updatedAt: runtimeState.updatedAt,
             access: this.getResolvedAccessControl(),
+            sales: this.getResolvedSalesSettings(),
             sources: sanitizedSources,
             billing: {
                 efipay: {

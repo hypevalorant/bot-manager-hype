@@ -1,6 +1,46 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SquareCloudProvisioningService = void 0;
+const node_fs_1 = require("node:fs");
+const node_path_1 = require("node:path");
+function readFirstEnvValue(envKeys) {
+    for (const envKey of envKeys) {
+        const value = String(process.env[envKey] ?? "").trim();
+        if (value) {
+            return value;
+        }
+    }
+    return "";
+}
+function normalizeNamespacePart(value, fallbackValue) {
+    const normalized = String(value ?? "")
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "_")
+        .replace(/^_+|_+$/g, "");
+    return normalized || fallbackValue;
+}
+function normalizeIdentifier(value, fallbackValue) {
+    const normalized = String(value ?? "")
+        .trim()
+        .replace(/[^a-zA-Z0-9_]/g, "");
+    return normalized || fallbackValue;
+}
+function readEnvFileAsBase64(pathEnvKeys, base64EnvKeys) {
+    const inlineBase64 = readFirstEnvValue(base64EnvKeys);
+    if (inlineBase64) {
+        return inlineBase64;
+    }
+    const configuredPath = readFirstEnvValue(pathEnvKeys);
+    if (!configuredPath) {
+        return "";
+    }
+    const absolutePath = (0, node_path_1.resolve)(configuredPath);
+    if (!(0, node_fs_1.existsSync)(absolutePath)) {
+        return "";
+    }
+    return (0, node_fs_1.readFileSync)(absolutePath).toString("base64");
+}
 class SquareCloudProvisioningService {
     squareCloudClient;
     sourceArtifactService;
@@ -25,16 +65,31 @@ class SquareCloudProvisioningService {
     isConfigured() {
         return this.squareCloudClient.isConfigured();
     }
+    buildGuildUrl(guildId) {
+        const normalizedGuildId = String(guildId ?? "").trim();
+        return normalizedGuildId ? `https://discord.com/channels/${normalizedGuildId}` : "";
+    }
+    buildManagedDescription(instance) {
+        const sequenceLabel = String(instance?.config?.saleSequenceLabel ?? "").trim() ||
+            String(Math.max(1, Number(instance?.saleSequenceNumber ?? 1) || 1)).padStart(2, "0");
+        const purchaserDiscordUserId = String(instance?.config?.purchaserDiscordUserId ?? instance?.config?.commercialOwnerDiscordUserId ?? instance?.config?.ownerDiscordUserId ?? "").trim() || "sem-comprador";
+        const soldAt = new Date(String(instance?.soldAt ?? instance?.config?.soldAt ?? instance?.createdAt ?? "").trim() || Date.now());
+        const day = String(Number.isFinite(soldAt.getTime()) ? soldAt.getUTCDate() : 0).padStart(2, "0");
+        const month = String(Number.isFinite(soldAt.getTime()) ? soldAt.getUTCMonth() + 1 : 0).padStart(2, "0");
+        const year = String(Number.isFinite(soldAt.getTime()) ? soldAt.getUTCFullYear() : 0);
+        return `Aplicacao ID ${sequenceLabel} - ${purchaserDiscordUserId} - ${day}-${month}-${year}`.slice(0, 120);
+    }
     async provisionInstance(instance, discordApp) {
         if (!this.squareCloudClient.isConfigured()) {
             throw new Error("SquareCloud nao configurada para provisionamento real.");
         }
-        const artifact = await this.sourceArtifactService.getArtifact(instance.sourceSlug, {
+        const overrides = {
             displayName: discordApp.appName,
-        });
-        const runtimeOptions = this.sourceArtifactService.getRuntimeOptions(instance.sourceSlug, {
-            displayName: discordApp.appName,
-        });
+            description: this.buildManagedDescription(instance),
+            artifactTag: instance.id,
+        };
+        const artifact = await this.sourceArtifactService.getArtifact(instance.sourceSlug, overrides);
+        const runtimeOptions = this.sourceArtifactService.getRuntimeOptions(instance.sourceSlug, overrides);
         const upload = await this.squareCloudClient.uploadApplication(artifact.fileBuffer, artifact.fileName);
         const appId = upload.response.id;
         await this.squareCloudClient.setAppEnvVars(appId, this.buildRuntimeEnv({
@@ -56,12 +111,13 @@ class SquareCloudProvisioningService {
         if (!instance.hostingAppId || instance.hostingAppId.startsWith("pending-")) {
             throw new Error("A instancia ainda nao possui uma app real para atualizar.");
         }
-        const artifact = await this.sourceArtifactService.getArtifact(instance.sourceSlug, {
+        const overrides = {
             displayName: discordApp.appName,
-        });
-        const runtimeOptions = this.sourceArtifactService.getRuntimeOptions(instance.sourceSlug, {
-            displayName: discordApp.appName,
-        });
+            description: this.buildManagedDescription(instance),
+            artifactTag: instance.id,
+        };
+        const artifact = await this.sourceArtifactService.getArtifact(instance.sourceSlug, overrides);
+        const runtimeOptions = this.sourceArtifactService.getRuntimeOptions(instance.sourceSlug, overrides);
         const commit = await this.squareCloudClient.commitApplication(instance.hostingAppId, artifact.fileBuffer, artifact.fileName);
         await this.squareCloudClient.setAppEnvVars(instance.hostingAppId, this.buildRuntimeEnv({
             appId: instance.hostingAppId,
@@ -85,6 +141,18 @@ class SquareCloudProvisioningService {
         await this.squareCloudClient.deleteApp(instance.hostingAppId);
     }
     buildRuntimeEnv(input) {
+        const runtimeStateEnv = this.buildRuntimeStateEnv(input);
+        const managedDescription = String(input.runtimeOptions?.description ?? this.buildManagedDescription(input.instance)).trim();
+        const saleSequenceLabel = String(input.instance?.config?.saleSequenceLabel ?? "").trim() ||
+            String(Math.max(1, Number(input.instance?.saleSequenceNumber ?? 1) || 1)).padStart(2, "0");
+        const soldAt = String(input.instance?.soldAt ?? input.instance?.config?.soldAt ?? input.instance?.createdAt ?? "").trim();
+        const purchaserDiscordUserId = String(input.instance?.config?.purchaserDiscordUserId ?? "").trim();
+        const purchaserDiscordUsername = String(input.instance?.config?.purchaserDiscordUsername ?? "").trim();
+        const customerId = String(input.instance?.config?.customerId ?? "").trim();
+        const subscriptionId = String(input.instance?.config?.subscriptionId ?? input.instance?.subscriptionId ?? "").trim();
+        const commercialOwnerDiscordUserId = String(input.instance?.config?.commercialOwnerDiscordUserId ?? "").trim();
+        const defaultGuildId = String(input.discordApp.defaultGuildId ?? "").trim();
+        const assignedGuildId = String(input.instance.assignedGuildId ?? "").trim();
         const runtimeEnv = {
             MANAGER_API_URL: this.getManagerApiUrl(),
             INSTANCE_ID: input.instance.id,
@@ -102,6 +170,16 @@ class SquareCloudProvisioningService {
             DISCORD_APP_NAME: input.discordApp.appName,
             SQUARECLOUD_APP_ID: input.appId,
             SQUARECLOUD_APPLICATION_ID: input.appId,
+            SQUARECLOUD_DESCRIPTION: managedDescription,
+            TENANT_SALE_SEQUENCE_LABEL: saleSequenceLabel,
+            TENANT_SALE_SEQUENCE_NUMBER: String(Math.max(1, Number(input.instance?.saleSequenceNumber ?? input.instance?.config?.saleSequenceNumber ?? 1) || 1)),
+            TENANT_SOLD_AT: soldAt,
+            TENANT_CUSTOMER_ID: customerId,
+            TENANT_SUBSCRIPTION_ID: subscriptionId,
+            TENANT_PURCHASER_DISCORD_USER_ID: purchaserDiscordUserId,
+            TENANT_PURCHASER_DISCORD_USERNAME: purchaserDiscordUsername,
+            TENANT_COMMERCIAL_OWNER_DISCORD_USER_ID: commercialOwnerDiscordUserId,
+            TENANT_INSTALL_URL: String(input.instance.installUrl ?? "").trim(),
         };
         if (input.runtimeOptions.entrypoint) {
             runtimeEnv.BOT_RUNTIME_ENTRYPOINT = input.runtimeOptions.entrypoint;
@@ -112,22 +190,110 @@ class SquareCloudProvisioningService {
         if (input.runtimeOptions.transcriptPublicUrl) {
             runtimeEnv.TRANSCRIPT_PUBLIC_URL = input.runtimeOptions.transcriptPublicUrl;
         }
-        if (input.discordApp.defaultGuildId) {
-            runtimeEnv.GUILD_ID = input.discordApp.defaultGuildId;
-            runtimeEnv.DEFAULT_GUILD_ID = input.discordApp.defaultGuildId;
+        if (defaultGuildId) {
+            runtimeEnv.GUILD_ID = defaultGuildId;
+            runtimeEnv.DEFAULT_GUILD_ID = defaultGuildId;
+            runtimeEnv.TENANT_DEFAULT_GUILD_ID = defaultGuildId;
+            runtimeEnv.TENANT_DEFAULT_GUILD_URL = this.buildGuildUrl(defaultGuildId);
         }
         const ownerDiscordUserId = String(input.instance.config.ownerDiscordUserId ?? "").trim();
         if (ownerDiscordUserId) {
             runtimeEnv.TENANT_CUSTOMER_DISCORD_USER_ID = ownerDiscordUserId;
+            runtimeEnv.TENANT_BOT_OWNER_DISCORD_USER_ID = ownerDiscordUserId;
         }
-        const assignedGuildId = String(input.instance.assignedGuildId ?? "").trim();
         if (assignedGuildId) {
             runtimeEnv.TENANT_ASSIGNED_GUILD_ID = assignedGuildId;
+            runtimeEnv.TENANT_ASSIGNED_GUILD_URL = this.buildGuildUrl(assignedGuildId);
         }
         return {
             ...input.discordApp.runtimeEnv,
+            ...runtimeStateEnv,
             ...runtimeEnv,
         };
+    }
+    buildRuntimeStateEnv(input) {
+        const databaseUrl = readFirstEnvValue([
+            "SOURCE_STATE_DATABASE_URL",
+            "BOT_RUNTIME_DATABASE_URL",
+            "DATABASE_URL",
+        ]);
+        if (!databaseUrl) {
+            return {};
+        }
+        const schema = normalizeIdentifier(readFirstEnvValue([
+            "SOURCE_STATE_DATABASE_SCHEMA",
+            "BOT_RUNTIME_DATABASE_SCHEMA",
+            "BOT_STATE_DATABASE_SCHEMA",
+        ]), "bot_runtime");
+        const docsTable = normalizeIdentifier(readFirstEnvValue([
+            "SOURCE_STATE_DATABASE_DOCS_TABLE",
+            "BOT_RUNTIME_DATABASE_DOCS_TABLE",
+            "BOT_STATE_DATABASE_DOCS_TABLE",
+        ]), "legacy_bot_state_documents");
+        const filesTable = normalizeIdentifier(readFirstEnvValue([
+            "SOURCE_STATE_DATABASE_FILES_TABLE",
+            "BOT_RUNTIME_DATABASE_FILES_TABLE",
+            "BOT_STATE_DATABASE_FILES_TABLE",
+        ]), "legacy_bot_state_files");
+        const namespace = [
+            normalizeNamespacePart(input.instance.sourceSlug, "source"),
+            normalizeNamespacePart(input.instance.id, "instance"),
+            "prod",
+        ].join("__");
+        const stateEnv = {
+            BOT_STATE_DATABASE_URL: databaseUrl,
+            BOT_STATE_NAMESPACE: namespace,
+            BOT_STATE_DATABASE_SCHEMA: schema,
+            BOT_STATE_DATABASE_DOCS_TABLE: docsTable,
+            BOT_STATE_DATABASE_FILES_TABLE: filesTable,
+            BOT_STATE_DATABASE_SSL: readFirstEnvValue([
+                "SOURCE_STATE_DATABASE_SSL",
+                "BOT_RUNTIME_DATABASE_SSL",
+                "DATABASE_SSL",
+            ]) || "true",
+            BOT_STATE_DATABASE_SSL_REJECT_UNAUTHORIZED: readFirstEnvValue([
+                "SOURCE_STATE_DATABASE_SSL_REJECT_UNAUTHORIZED",
+                "BOT_RUNTIME_DATABASE_SSL_REJECT_UNAUTHORIZED",
+                "DATABASE_SSL_REJECT_UNAUTHORIZED",
+            ]) || "false",
+        };
+        const caBase64 = readEnvFileAsBase64([
+            "SOURCE_STATE_DATABASE_SSL_CA_PATH",
+            "BOT_RUNTIME_DATABASE_SSL_CA_PATH",
+            "DATABASE_SSL_CA_PATH",
+        ], [
+            "SOURCE_STATE_DATABASE_SSL_CA_BASE64",
+            "BOT_RUNTIME_DATABASE_SSL_CA_BASE64",
+            "DATABASE_SSL_CA_BASE64",
+        ]);
+        const certBase64 = readEnvFileAsBase64([
+            "SOURCE_STATE_DATABASE_SSL_CERT_PATH",
+            "BOT_RUNTIME_DATABASE_SSL_CERT_PATH",
+            "DATABASE_SSL_CERT_PATH",
+        ], [
+            "SOURCE_STATE_DATABASE_SSL_CERT_BASE64",
+            "BOT_RUNTIME_DATABASE_SSL_CERT_BASE64",
+            "DATABASE_SSL_CERT_BASE64",
+        ]);
+        const keyBase64 = readEnvFileAsBase64([
+            "SOURCE_STATE_DATABASE_SSL_KEY_PATH",
+            "BOT_RUNTIME_DATABASE_SSL_KEY_PATH",
+            "DATABASE_SSL_KEY_PATH",
+        ], [
+            "SOURCE_STATE_DATABASE_SSL_KEY_BASE64",
+            "BOT_RUNTIME_DATABASE_SSL_KEY_BASE64",
+            "DATABASE_SSL_KEY_BASE64",
+        ]);
+        if (caBase64) {
+            stateEnv.BOT_STATE_DATABASE_SSL_CA_BASE64 = caBase64;
+        }
+        if (certBase64) {
+            stateEnv.BOT_STATE_DATABASE_SSL_CERT_BASE64 = certBase64;
+        }
+        if (keyBase64) {
+            stateEnv.BOT_STATE_DATABASE_SSL_KEY_BASE64 = keyBase64;
+        }
+        return stateEnv;
     }
 }
 exports.SquareCloudProvisioningService = SquareCloudProvisioningService;

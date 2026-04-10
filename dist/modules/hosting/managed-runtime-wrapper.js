@@ -57,8 +57,58 @@ function resolveEntrypoint() {
 function syncBootstrapEnv(bootstrap) {
   process.env.INSTANCE_STATUS = String(bootstrap?.instance?.status || "");
   process.env.INSTANCE_EXPIRES_AT = String(bootstrap?.instance?.expiresAt || "");
-  process.env.TENANT_CUSTOMER_DISCORD_USER_ID = String(bootstrap?.tenant?.customerDiscordUserId || "");
-  process.env.TENANT_ASSIGNED_GUILD_ID = String(bootstrap?.tenant?.assignedGuildId || "");
+  process.env.TENANT_CUSTOMER_ID = String(bootstrap?.tenant?.customerId || process.env.TENANT_CUSTOMER_ID || "");
+  process.env.TENANT_SUBSCRIPTION_ID = String(bootstrap?.tenant?.subscriptionId || process.env.TENANT_SUBSCRIPTION_ID || "");
+  process.env.TENANT_CUSTOMER_DISCORD_USER_ID = String(bootstrap?.tenant?.customerDiscordUserId || process.env.TENANT_CUSTOMER_DISCORD_USER_ID || "");
+  process.env.TENANT_CUSTOMER_DISCORD_USERNAME = String(bootstrap?.tenant?.customerDiscordUsername || process.env.TENANT_CUSTOMER_DISCORD_USERNAME || "");
+  process.env.TENANT_COMMERCIAL_OWNER_DISCORD_USER_ID = String(bootstrap?.tenant?.commercialOwnerDiscordUserId || process.env.TENANT_COMMERCIAL_OWNER_DISCORD_USER_ID || "");
+  process.env.TENANT_PURCHASER_DISCORD_USER_ID = String(bootstrap?.tenant?.purchaserDiscordUserId || process.env.TENANT_PURCHASER_DISCORD_USER_ID || "");
+  process.env.TENANT_PURCHASER_DISCORD_USERNAME = String(bootstrap?.tenant?.purchaserDiscordUsername || process.env.TENANT_PURCHASER_DISCORD_USERNAME || "");
+  process.env.TENANT_BOT_OWNER_DISCORD_USER_ID = String(bootstrap?.tenant?.botOwnerDiscordUserId || process.env.TENANT_BOT_OWNER_DISCORD_USER_ID || "");
+  process.env.TENANT_ASSIGNED_GUILD_ID = String(bootstrap?.tenant?.assignedGuildId || process.env.TENANT_ASSIGNED_GUILD_ID || "");
+  process.env.TENANT_ASSIGNED_GUILD_URL = String(bootstrap?.tenant?.assignedGuildUrl || process.env.TENANT_ASSIGNED_GUILD_URL || "");
+  process.env.TENANT_DEFAULT_GUILD_ID = String(bootstrap?.tenant?.defaultGuildId || process.env.TENANT_DEFAULT_GUILD_ID || "");
+  process.env.TENANT_DEFAULT_GUILD_URL = String(bootstrap?.tenant?.defaultGuildUrl || process.env.TENANT_DEFAULT_GUILD_URL || "");
+  process.env.TENANT_INSTALL_URL = String(bootstrap?.tenant?.installUrl || process.env.TENANT_INSTALL_URL || "");
+  process.env.TENANT_PRODUCT_SLUG = String(bootstrap?.tenant?.productSlug || process.env.TENANT_PRODUCT_SLUG || "");
+  process.env.TENANT_PRODUCT_NAME = String(bootstrap?.tenant?.productName || process.env.TENANT_PRODUCT_NAME || "");
+  process.env.TENANT_PLAN_NAME = String(bootstrap?.tenant?.planName || process.env.TENANT_PLAN_NAME || "");
+  process.env.TENANT_SALE_SEQUENCE_LABEL = String(bootstrap?.instance?.saleSequenceLabel || process.env.TENANT_SALE_SEQUENCE_LABEL || "");
+  process.env.TENANT_SALE_SEQUENCE_NUMBER = String(bootstrap?.instance?.saleSequenceNumber || process.env.TENANT_SALE_SEQUENCE_NUMBER || "");
+  process.env.TENANT_SOLD_AT = String(bootstrap?.instance?.soldAt || process.env.TENANT_SOLD_AT || "");
+  process.env.SQUARECLOUD_DESCRIPTION = String(bootstrap?.instance?.managedDescription || process.env.SQUARECLOUD_DESCRIPTION || "");
+}
+
+function buildRuntimeSummary(payload) {
+  return {
+    saleSequenceLabel: String(payload?.instance?.saleSequenceLabel || process.env.TENANT_SALE_SEQUENCE_LABEL || ""),
+    soldAt: String(payload?.instance?.soldAt || process.env.TENANT_SOLD_AT || ""),
+    managedDescription: String(payload?.instance?.managedDescription || process.env.SQUARECLOUD_DESCRIPTION || ""),
+    purchaserDiscordUserId: String(payload?.tenant?.purchaserDiscordUserId || process.env.TENANT_PURCHASER_DISCORD_USER_ID || ""),
+    purchaserDiscordUsername: String(payload?.tenant?.purchaserDiscordUsername || process.env.TENANT_PURCHASER_DISCORD_USERNAME || ""),
+    customerId: String(payload?.tenant?.customerId || process.env.TENANT_CUSTOMER_ID || ""),
+    subscriptionId: String(payload?.tenant?.subscriptionId || process.env.TENANT_SUBSCRIPTION_ID || ""),
+    customerDiscordUserId: String(payload?.tenant?.customerDiscordUserId || process.env.TENANT_CUSTOMER_DISCORD_USER_ID || ""),
+    customerDiscordUsername: String(payload?.tenant?.customerDiscordUsername || process.env.TENANT_CUSTOMER_DISCORD_USERNAME || ""),
+    commercialOwnerDiscordUserId: String(payload?.tenant?.commercialOwnerDiscordUserId || process.env.TENANT_COMMERCIAL_OWNER_DISCORD_USER_ID || ""),
+    botOwnerDiscordUserId: String(payload?.tenant?.botOwnerDiscordUserId || process.env.TENANT_BOT_OWNER_DISCORD_USER_ID || ""),
+    productSlug: String(payload?.tenant?.productSlug || process.env.TENANT_PRODUCT_SLUG || ""),
+    productName: String(payload?.tenant?.productName || process.env.TENANT_PRODUCT_NAME || ""),
+    planName: String(payload?.tenant?.planName || process.env.TENANT_PLAN_NAME || ""),
+    assignedGuildId: String(payload?.tenant?.assignedGuildId || process.env.TENANT_ASSIGNED_GUILD_ID || ""),
+    assignedGuildUrl: String(payload?.tenant?.assignedGuildUrl || process.env.TENANT_ASSIGNED_GUILD_URL || ""),
+    defaultGuildId: String(payload?.tenant?.defaultGuildId || process.env.TENANT_DEFAULT_GUILD_ID || ""),
+    defaultGuildUrl: String(payload?.tenant?.defaultGuildUrl || process.env.TENANT_DEFAULT_GUILD_URL || ""),
+    installUrl: String(payload?.tenant?.installUrl || process.env.TENANT_INSTALL_URL || ""),
+    discordApplicationId: String(process.env.DISCORD_APPLICATION_ID || process.env.APPLICATION_ID || ""),
+    discordClientId: String(process.env.DISCORD_CLIENT_ID || process.env.CLIENT_ID || ""),
+    squareCloudAppId: String(process.env.SQUARECLOUD_APP_ID || process.env.SQUARECLOUD_APPLICATION_ID || ""),
+    managerInstanceId: String(payload?.instance?.id || process.env.INSTANCE_ID || ""),
+  };
+}
+
+function logRuntimeSummary(label, payload) {
+  console.log("[managed-runtime] " + label + ":", JSON.stringify(buildRuntimeSummary(payload), null, 2));
 }
 
 function spawnBotProcess() {
@@ -103,6 +153,7 @@ function requestShutdown(reason) {
 }
 
 async function sendHeartbeat() {
+  const previousAssignedGuildId = String(process.env.TENANT_ASSIGNED_GUILD_ID || "");
   const heartbeat = await postJson("/internal/instances/heartbeat", {
     instanceId,
     instanceSecret,
@@ -115,6 +166,11 @@ async function sendHeartbeat() {
       sourceVersion: process.env.SOURCE_VERSION || "",
     },
   });
+  syncBootstrapEnv(heartbeat);
+  const currentAssignedGuildId = String(process.env.TENANT_ASSIGNED_GUILD_ID || "");
+  if (currentAssignedGuildId && currentAssignedGuildId !== previousAssignedGuildId) {
+    logRuntimeSummary("servidor vinculado atualizado", heartbeat);
+  }
 
   if (String(heartbeat?.desiredState || "") !== "running") {
     requestShutdown("manager solicitou bloqueio/suspensao");
@@ -128,6 +184,7 @@ async function main() {
   });
 
   syncBootstrapEnv(bootstrap);
+  logRuntimeSummary("contexto da aplicacao vendida", bootstrap);
   spawnBotProcess();
   await sendHeartbeat();
 

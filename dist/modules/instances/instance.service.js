@@ -15,6 +15,77 @@ class InstanceService {
         this.squareCloudAccountId = squareCloudAccountId;
         this.provisioningService = provisioningService;
     }
+    getNextSaleSequenceNumber() {
+        const explicitMax = this.store.instances.reduce((maxValue, instance) => {
+            const numericValue = Number(instance?.saleSequenceNumber ?? instance?.config?.saleSequenceNumber ?? 0);
+            return Number.isFinite(numericValue) && numericValue > maxValue ? numericValue : maxValue;
+        }, 0);
+        return Math.max(explicitMax, this.store.instances.length) + 1;
+    }
+    formatSaleSequenceLabel(value) {
+        const numericValue = Math.max(1, Number(value) || 1);
+        return String(numericValue).padStart(2, "0");
+    }
+    formatSaleDateLabel(isoDate) {
+        const date = new Date(isoDate);
+        if (!Number.isFinite(date.getTime())) {
+            return "data-nao-informada";
+        }
+        const day = String(date.getUTCDate()).padStart(2, "0");
+        const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+        const year = String(date.getUTCFullYear());
+        return `${day}-${month}-${year}`;
+    }
+    buildManagedSaleDescription(sequenceLabel, purchaserDiscordUserId, soldAt) {
+        return `Aplicacao ID ${sequenceLabel} - ${String(purchaserDiscordUserId ?? "").trim() || "sem-comprador"} - ${this.formatSaleDateLabel(soldAt)}`.slice(0, 120);
+    }
+    buildRuntimePayload(instance, subscription) {
+        const customer = this.store.customers.find((item) => item.id === subscription.customerId) ?? null;
+        const product = this.store.products.find((item) => item.id === subscription.productId) ?? null;
+        const plan = this.store.plans.find((item) => item.id === subscription.planId) ?? null;
+        const discordApp = this.store.discordApps.find((item) => item.id === instance.discordAppId) ?? null;
+        const purchaserDiscordUserId = String(instance?.config?.purchaserDiscordUserId ?? subscription.commercialOwnerDiscordUserId ?? customer?.discordUserId ?? "").trim() || null;
+        const defaultGuildId = String(discordApp?.defaultGuildId ?? "").trim() || null;
+        const assignedGuildId = String(instance.assignedGuildId ?? "").trim() || null;
+        const saleSequenceNumber = Math.max(1, Number(instance?.saleSequenceNumber ?? instance?.config?.saleSequenceNumber ?? 1) || 1);
+        const saleSequenceLabel = String(instance?.config?.saleSequenceLabel ?? this.formatSaleSequenceLabel(saleSequenceNumber)).trim();
+        const soldAt = String(instance?.soldAt ?? instance?.config?.soldAt ?? subscription.createdAt ?? instance.createdAt ?? "").trim() || null;
+        const assignedGuildUrl = assignedGuildId ? `https://discord.com/channels/${assignedGuildId}` : null;
+        const defaultGuildUrl = defaultGuildId ? `https://discord.com/channels/${defaultGuildId}` : null;
+        return {
+            instance: {
+                id: instance.id,
+                status: instance.status,
+                expiresAt: instance.expiresAt,
+                hostingProvider: instance.hostingProvider,
+                hostingAccountId: instance.hostingAccountId,
+                hostingAppId: instance.hostingAppId,
+                saleSequenceNumber,
+                saleSequenceLabel,
+                soldAt,
+                managedDescription: String(instance?.managedSquareCloudDescription ?? this.buildManagedSaleDescription(saleSequenceLabel, purchaserDiscordUserId, soldAt ?? instance.createdAt)).trim(),
+            },
+            tenant: {
+                customerId: customer?.id ?? subscription.customerId ?? null,
+                subscriptionId: subscription.id,
+                customerDiscordUserId: String(customer?.discordUserId ?? subscription.commercialOwnerDiscordUserId ?? "").trim() || null,
+                customerDiscordUsername: String(customer?.discordUsername ?? "").trim() || null,
+                commercialOwnerDiscordUserId: String(subscription.commercialOwnerDiscordUserId ?? "").trim() || null,
+                purchaserDiscordUserId,
+                purchaserDiscordUsername: String(instance?.config?.purchaserDiscordUsername ?? customer?.discordUsername ?? "").trim() || null,
+                botOwnerDiscordUserId: String(instance?.config?.ownerDiscordUserId ?? "").trim() || null,
+                assignedGuildId,
+                assignedGuildUrl,
+                defaultGuildId,
+                defaultGuildUrl,
+                installUrl: instance.installUrl ?? null,
+                productSlug: String(product?.slug ?? instance?.config?.productSlug ?? "").trim() || null,
+                productName: String(product?.name ?? "").trim() || null,
+                planName: String(plan?.name ?? "").trim() || null,
+            },
+            config: instance.config,
+        };
+    }
     async provision(subscription) {
         const existing = this.store.instances.find((instance) => instance.subscriptionId === subscription.id);
         if (existing) {
@@ -132,6 +203,10 @@ class InstanceService {
         if (!instance || instance.instanceSecret !== instanceSecret) {
             throw new Error("Credenciais da instancia invalidas.");
         }
+        const subscription = this.store.subscriptions.find((item) => item.id === instance.subscriptionId);
+        if (!subscription) {
+            throw new Error("Assinatura da instancia nao encontrada.");
+        }
         instance.lastHeartbeatAt = (0, utils_js_1.nowIso)();
         instance.updatedAt = instance.lastHeartbeatAt;
         return {
@@ -140,6 +215,7 @@ class InstanceService {
             nextConfigVersion: instance.configVersion,
             metricsReceived: metrics,
             expiresAt: instance.expiresAt,
+            ...this.buildRuntimePayload(instance, subscription),
         };
     }
     bootstrap(instanceId, instanceSecret) {
@@ -153,19 +229,7 @@ class InstanceService {
         }
         return {
             ok: true,
-            instance: {
-                id: instance.id,
-                status: instance.status,
-                expiresAt: instance.expiresAt,
-                hostingProvider: instance.hostingProvider,
-                hostingAccountId: instance.hostingAccountId,
-                hostingAppId: instance.hostingAppId,
-            },
-            tenant: {
-                customerDiscordUserId: subscription.commercialOwnerDiscordUserId,
-                assignedGuildId: instance.assignedGuildId,
-            },
-            config: instance.config,
+            ...this.buildRuntimePayload(instance, subscription),
         };
     }
     registerCustomerProvidedDiscordApp(input) {
@@ -200,6 +264,13 @@ class InstanceService {
     }
     async createAndProvisionInstance(subscription, productSlug, sourceSlug, app, ownerDiscordUserId) {
         const timestamp = (0, utils_js_1.nowIso)();
+        const customer = this.store.customers.find((item) => item.id === subscription.customerId) ?? null;
+        const saleSequenceNumber = this.getNextSaleSequenceNumber();
+        const saleSequenceLabel = this.formatSaleSequenceLabel(saleSequenceNumber);
+        const soldAt = String(subscription.createdAt ?? timestamp).trim() || timestamp;
+        const purchaserDiscordUserId = String(subscription.commercialOwnerDiscordUserId ?? customer?.discordUserId ?? "").trim() || null;
+        const purchaserDiscordUsername = String(customer?.discordUsername ?? "").trim() || null;
+        const managedSquareCloudDescription = this.buildManagedSaleDescription(saleSequenceLabel, purchaserDiscordUserId, soldAt);
         const installUrl = (0, utils_js_1.buildInstallUrl)({
             clientId: app.clientId,
             permissions: this.defaultPermissions,
@@ -216,11 +287,23 @@ class InstanceService {
             installUrl,
             instanceSecret: (0, utils_js_1.makeSecret)(),
             assignedGuildId: null,
+            saleSequenceNumber,
+            soldAt,
+            managedSquareCloudDescription,
             status: "provisioning",
             configVersion: 1,
             config: {
                 locale: "pt-BR",
                 ownerDiscordUserId: String(ownerDiscordUserId ?? "").trim() || subscription.commercialOwnerDiscordUserId,
+                commercialOwnerDiscordUserId: String(subscription.commercialOwnerDiscordUserId ?? "").trim() || purchaserDiscordUserId,
+                purchaserDiscordUserId,
+                purchaserDiscordUsername,
+                customerId: subscription.customerId,
+                subscriptionId: subscription.id,
+                saleSequenceNumber,
+                saleSequenceLabel,
+                soldAt,
+                managedSquareCloudDescription,
                 productSlug,
                 discordClientId: app.clientId,
                 discordApplicationId: app.applicationId,

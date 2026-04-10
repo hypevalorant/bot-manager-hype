@@ -8,6 +8,7 @@ const adm_zip_1 = require("adm-zip");
 const yazl_1 = require("yazl");
 const utils_js_1 = require("../../core/utils.js");
 const managed_runtime_wrapper_js_1 = require("./managed-runtime-wrapper.js");
+const AdmZip = typeof adm_zip_1 === "function" ? adm_zip_1 : adm_zip_1.default;
 const EXCLUDED_DIR_NAMES = new Set([
     ".git",
     ".github",
@@ -44,6 +45,10 @@ class SourceArtifactService {
                 runtimeSourceConfig.displayName ??
                 this.readEnvValue(`SOURCE_DISPLAY_NAME_${envKeyPart}`) ??
                 `${sourceSlug} Runtime`,
+            description: overrides.description ??
+                runtimeSourceConfig.description ??
+                this.readEnvValue(`SOURCE_DESCRIPTION_${envKeyPart}`) ??
+                `Runtime gerenciado para ${sourceSlug}`,
             memory: runtimeSourceConfig.memory ?? this.readEnvValue(`SOURCE_MEMORY_${envKeyPart}`) ?? "512",
             appPublicUrl: runtimeSourceConfig.appPublicUrl ??
                 this.readEnvValue(`SOURCE_APP_PUBLIC_URL_${envKeyPart}`) ??
@@ -237,7 +242,7 @@ class SourceArtifactService {
         return artifactPath;
     }
     extractSourceFilesFromArchive(archiveBuffer, sourcePath = null, configuredExcludedPaths = []) {
-        const archive = new adm_zip_1.default(Buffer.from(archiveBuffer));
+        const archive = new AdmZip(Buffer.from(archiveBuffer));
         const normalizedSourcePath = String(sourcePath ?? "")
             .trim()
             .replaceAll("\\", "/")
@@ -367,12 +372,13 @@ class SourceArtifactService {
             `MEMORY=${runtimeOptions.memory}`,
             "VERSION=recommended",
             "AUTORESTART=true",
-            `DESCRIPTION=Runtime gerenciado para ${sourceSlug}`,
+            `DESCRIPTION=${String(runtimeOptions.description ?? `Runtime gerenciado para ${sourceSlug}`).trim() || `Runtime gerenciado para ${sourceSlug}`}`,
         ].join("\n");
     }
     getGeneratedArtifactPath(sourceSlug, overrides = {}) {
-        const suffix = overrides.displayName
-            ? `-${(0, utils_js_1.normalizeEnvKeyPart)(overrides.displayName).slice(0, 32).toLowerCase()}`
+        const suffixSource = overrides.artifactTag ?? overrides.displayName;
+        const suffix = suffixSource
+            ? `-${(0, utils_js_1.normalizeEnvKeyPart)(suffixSource).slice(0, 48).toLowerCase()}`
             : "";
         return (0, node_path_1.resolve)(process.cwd(), this.artifactsDir, "generated", `${sourceSlug}${suffix}.zip`);
     }
