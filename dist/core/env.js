@@ -12,9 +12,16 @@ function normalizeEnvValue(value) {
     }
     return trimmed.slice(1, -1);
 }
+function resolveCandidateEnvPaths(filePath) {
+    return [
+        (0, node_path_1.resolve)(process.cwd(), filePath),
+        (0, node_path_1.resolve)("/application", filePath),
+        (0, node_path_1.resolve)((0, node_path_1.dirname)(process.argv[1] ?? ""), "..", filePath),
+    ].filter((candidatePath, index, list) => Boolean(candidatePath) && list.indexOf(candidatePath) === index);
+}
 function loadEnvFile(filePath = ".env") {
-    const resolvedPath = (0, node_path_1.resolve)(process.cwd(), filePath);
-    if (!(0, node_fs_1.existsSync)(resolvedPath)) {
+    const resolvedPath = resolveCandidateEnvPaths(filePath).find((candidatePath) => (0, node_fs_1.existsSync)(candidatePath));
+    if (!resolvedPath) {
         return;
     }
     const content = (0, node_fs_1.readFileSync)(resolvedPath, "utf8");
