@@ -3197,6 +3197,13 @@ class ManagerBotService {
         const selectedAddons = this.getCartSelectedAddons(product, state);
         const totalAmountCents = this.calculateCartTotalCents(product, state);
         const inactivityMinutes = Math.max(1, Number(this.dependencies.managerRuntimeConfigService.getResolvedSalesSettings().cartInactivityMinutes ?? 5));
+        const addonsSummaryBlock = [
+            "```diff",
+            ...(selectedAddons.length > 0
+                ? selectedAddons.map((addon) => `+ ${addon.name}${addon.priceCents > 0 ? `  +${this.formatCurrency(addon.priceCents)}` : ""}`)
+                : ["+ Nenhum"]),
+            "```",
+        ].join("\n");
         if (state.step === "addons") {
             const embed = new discord_js_1.EmbedBuilder()
                 .setColor(this.resolveProductPanelColor(product, 0xf59e0b))
@@ -3208,13 +3215,7 @@ class ManagerBotService {
                 `${product.name} (${selectedPlan?.durationDays ?? 0} dias) - **${this.formatCurrency(selectedPlan?.priceCents ?? 0)}**`,
                 "",
                 "**Adicionais**",
-                selectedAddons.length > 0
-                    ? selectedAddons
-                        .map((addon) => `\`+ ${addon.name}${addon.priceCents > 0 ? `   +${this.formatCurrency(addon.priceCents)}` : ""}\``)
-                        .join("\n")
-                    : "`+ Nenhum`",
-                "",
-                `Carrinho fecha automaticamente apos **${inactivityMinutes} minuto(s)** sem atividade.`,
+                addonsSummaryBlock,
                 "",
                 "**Valor a pagar**",
                 `**${this.formatCurrency(totalAmountCents)}**`,
@@ -3235,7 +3236,6 @@ class ManagerBotService {
             .setDescription(this.limitMessageSize([
             `Ola <@${user.id}>`,
             "Selecione um plano para seu bot.",
-            `O carrinho fecha automaticamente apos ${inactivityMinutes} minuto(s) sem atividade.`,
         ].join("\n")))
             .addFields({
             name: "Produto",
