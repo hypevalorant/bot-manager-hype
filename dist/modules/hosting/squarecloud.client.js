@@ -58,22 +58,45 @@ class SquareCloudClient {
             method: "POST",
         });
     }
+    normalizeEnvEntries(envs) {
+        return Object.fromEntries(Object.entries(envs ?? {})
+            .filter(([key, value]) => String(key ?? "").trim() && value !== undefined && value !== null)
+            .map(([key, value]) => [String(key).trim(), this.normalizeEnvValue(value)]));
+    }
+    normalizeEnvValue(value) {
+        const normalized = String(value);
+        return /[\s"'`\\#]/u.test(normalized) ? JSON.stringify(normalized) : normalized;
+    }
     async deleteApp(appId) {
         return this.request(`/apps/${appId}`, {
             method: "DELETE",
         });
     }
     async setAppEnvVars(appId, envs) {
+        const payload = JSON.stringify({
+            envs: this.normalizeEnvEntries(envs),
+        });
+        try {
+            return await this.request(`/apps/${appId}/envs`, {
+                method: "PUT",
+                body: payload,
+            });
+        }
+        catch (error) {
+            const code = String(error?.code ?? "").trim().toUpperCase();
+            const status = Number(error?.status ?? 0) || 0;
+            if (status !== 404 && code !== "METHOD_NOT_ALLOWED") {
+                throw error;
+            }
+        }
         return this.request(`/apps/${appId}/envs`, {
             method: "POST",
-            body: JSON.stringify({
-                envs,
-            }),
+            body: payload,
         });
     }
     async request(path, init) {
         if (!this.apiKey) {
-            throw new Error("SQUARECLOUD_API_KEY nao configurada.");
+            throw new Error("SQUARECLOUD_API_KEY não configurada.");
         }
         const response = await fetch(`${this.baseUrl}${path}`, {
             ...init,
@@ -84,7 +107,29 @@ class SquareCloudClient {
             },
         });
         if (!response.ok) {
-            throw new Error(`Square Cloud respondeu ${response.status} para ${path}.`);
+            const rawBody = await response.text().catch(() => "");
+            let parsedBody = null;
+            try {
+                parsedBody = rawBody ? JSON.parse(rawBody) : null;
+            }
+            catch {
+                parsedBody = null;
+            }
+            const code = String(parsedBody?.code ?? "").trim();
+            const detail = String(parsedBody?.message ?? parsedBody?.error ?? rawBody ?? "").trim();
+            const suffix = [
+                code ? `code=${code}` : "",
+                detail ? `detail=${detail}` : "",
+            ].filter(Boolean).join(" | ");
+            const error = new Error([
+                `Square Cloud respondeu ${response.status} para ${path}.`,
+                suffix,
+            ].filter(Boolean).join(" "));
+            error.status = response.status;
+            error.path = path;
+            error.code = code || null;
+            error.body = parsedBody ?? rawBody;
+            throw error;
         }
         return (await response.json());
     }

@@ -2742,6 +2742,7 @@ class ManagerBotService {
         const paymentId = interaction.customId.slice(MODAL_IDS.botSetupPrefix.length);
         await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
         try {
+            await interaction.editReply("🔄 | Configurando o seu bot...");
             let customBioText = "";
             try {
                 customBioText = interaction.fields.getTextInputValue("setup_custom_bio_text");
@@ -2754,31 +2755,32 @@ class ManagerBotService {
                 botToken: interaction.fields.getTextInputValue("setup_bot_token"),
                 ownerDiscordUserId: interaction.fields.getTextInputValue("setup_owner_discord_user_id"),
                 customBioText,
+            }, {
+                onProgress: async (progress) => {
+                    const message = String(progress?.message ?? "").trim();
+                    if (!message) {
+                        return;
+                    }
+                    await interaction.editReply(message).catch(() => null);
+                },
             });
             await this.persistStoreIfNeeded();
-            const lines = [
-                "Bot enviado para provisionamento com sucesso.",
-                `Aplicacao: ${result.application?.name ?? "nao informada"}`,
-                result.application?.id ? `Application ID: ${result.application.id}` : null,
-                result.instance?.hostingAppId ? `SquareCloud App: ${result.instance.hostingAppId}` : null,
-                result.application?.inviteUrl ? `Install URL: ${result.application.inviteUrl}` : null,
-            ].filter(Boolean);
-            const payload = await this.buildAppsPanelPayload(interaction.user.id, 0, result.instance?.id ? `inst_${result.instance.id}` : null, "overview", "Bot enviado para provisionamento com sucesso.");
+            const successMessage = String(result?.successMessage ?? "").trim() ||
+                "✅ | Bot ligado! Seu sistema já está funcionando, use /botsetup no seu servidor para efetuar as primeiras configurações!";
+            const payload = await this.buildAppsPanelPayload(interaction.user.id, 0, result.instance?.id ? `inst_${result.instance.id}` : null, "overview", "Bot ligado com sucesso.");
             const updated = await this.tryUpdateTrackedAppsPanel(interaction.user.id, payload);
-            if (updated) {
-                await interaction.deleteReply().catch(() => null);
+            await interaction.editReply(successMessage);
+            if (!updated) {
                 return;
             }
-            await interaction.editReply(lines.join("\n"));
         }
         catch (error) {
-            const payload = await this.buildAppsPanelPayload(interaction.user.id, 0, null, "overview", `Nao consegui provisionar seu bot agora: ${error.message}`);
+            const payload = await this.buildAppsPanelPayload(interaction.user.id, 0, null, "overview", `Não consegui provisionar seu bot agora: ${error.message}`);
             const updated = await this.tryUpdateTrackedAppsPanel(interaction.user.id, payload);
-            if (updated) {
-                await interaction.deleteReply().catch(() => null);
+            await interaction.editReply(`❌ | Não consegui provisionar seu bot agora: ${error.message}`);
+            if (!updated) {
                 return;
             }
-            await interaction.editReply(`Nao consegui provisionar seu bot agora: ${error.message}`);
         }
     }
     async handleAppsSelection(interaction) {
@@ -2815,11 +2817,11 @@ class ManagerBotService {
         const selectedKey = String(selectedKeyRaw ?? "").trim();
         const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
         if (!entry?.instance) {
-            await this.replyEphemeral(interaction, "Nao encontrei a aplicacao selecionada para executar essa acao.");
+            await this.replyEphemeral(interaction, "Não encontrei a aplicação selecionada para executar essa ação.");
             return;
         }
         if (!this.canUpdateInstance(interaction.user.id, entry.instance)) {
-            await this.replyEphemeral(interaction, "Voce nao pode controlar essa aplicacao.");
+            await this.replyEphemeral(interaction, "Você não pode controlar essa aplicação.");
             return;
         }
         this.rememberAppsPanelInteraction(interaction);
@@ -2846,18 +2848,18 @@ class ManagerBotService {
             entry.instance.updatedAt = new Date().toISOString();
             await this.persistStoreIfNeeded();
             const actionLabels = {
-                start: "Aplicacao ligada com sucesso.",
-                stop: "Aplicacao desligada com sucesso.",
-                restart: "Aplicacao reiniciada com sucesso.",
+                start: "Aplicação ligada com sucesso.",
+                stop: "Aplicação desligada com sucesso.",
+                restart: "Aplicação reiniciada com sucesso.",
             };
-            const successPayload = await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "overview", actionLabels[action] ?? "Aplicacao atualizada.");
+            const successPayload = await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "overview", actionLabels[action] ?? "Aplicação atualizada.");
             const updated = await this.tryUpdateTrackedAppsPanel(interaction.user.id, successPayload);
             if (!updated) {
                 await interaction.editReply(successPayload).catch(() => null);
             }
         }
         catch (error) {
-            const failurePayload = await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "overview", `Falha ao executar essa acao: ${error?.message ?? "erro desconhecido"}`);
+            const failurePayload = await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "overview", `Falha ao executar essa ação: ${error?.message ?? "erro desconhecido"}`);
             const updated = await this.tryUpdateTrackedAppsPanel(interaction.user.id, failurePayload);
             if (!updated) {
                 await interaction.editReply(failurePayload).catch(() => null);
@@ -2870,16 +2872,16 @@ class ManagerBotService {
         const selectedKey = String(selectedKeyRaw ?? "").trim();
         const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
         if (!entry?.bundle) {
-            await this.replyEphemeral(interaction, "Nao encontrei a assinatura selecionada.");
+            await this.replyEphemeral(interaction, "Não encontrei a assinatura selecionada.");
             return;
         }
         if (!this.canManageSubscription(interaction.user.id, entry.bundle.subscription)) {
-            await this.replyEphemeral(interaction, "Essa assinatura nao pertence a voce.");
+            await this.replyEphemeral(interaction, "Essa assinatura não pertence a você.");
             return;
         }
         const payment = this.findApprovedActivationPayment(entry.bundle.subscription.id);
         if (!payment) {
-            await this.replyEphemeral(interaction, "Nao achei um pagamento de ativacao aprovado para essa assinatura.");
+            await this.replyEphemeral(interaction, "Não achei um pagamento de ativação aprovado para essa assinatura.");
             return;
         }
         this.rememberAppsPanelInteraction(interaction);
@@ -2889,7 +2891,7 @@ class ManagerBotService {
             await interaction.showModal(this.buildBotSetupModal(payment.id, entry.bundle, payment));
         }
         catch (error) {
-            await this.replyEphemeral(interaction, `Nao consegui abrir o setup agora: ${error.message}`);
+            await this.replyEphemeral(interaction, `Não consegui abrir o setup agora: ${error.message}`);
         }
     }
     async handleAppsRenameButton(interaction) {
@@ -2899,7 +2901,7 @@ class ManagerBotService {
         const selectedKey = String(selectedKeyRaw ?? "").trim();
         const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
         if (!entry?.instance || !entry.discordApp) {
-            await this.replyEphemeral(interaction, "Nao encontrei a aplicacao selecionada para renomear.");
+            await this.replyEphemeral(interaction, "Não encontrei a aplicação selecionada para renomear.");
             return;
         }
         this.rememberAppsPanelInteraction(interaction);
@@ -2912,7 +2914,7 @@ class ManagerBotService {
         const selectedKey = String(selectedKeyRaw ?? "").trim();
         const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
         if (!entry?.instance || !entry.discordApp) {
-            await this.replyEphemeral(interaction, "Nao encontrei a aplicacao selecionada para trocar o token.");
+            await this.replyEphemeral(interaction, "Não encontrei a aplicação selecionada para trocar o token.");
             return;
         }
         this.rememberAppsPanelInteraction(interaction);
@@ -2925,7 +2927,7 @@ class ManagerBotService {
         const selectedKey = String(selectedKeyRaw ?? "").trim();
         const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
         if (!entry?.instance || !entry.discordApp) {
-            await this.replyEphemeral(interaction, "Nao encontrei a aplicacao selecionada para trocar o dono do bot.");
+            await this.replyEphemeral(interaction, "Não encontrei a aplicação selecionada para trocar o dono do bot.");
             return;
         }
         this.rememberAppsPanelInteraction(interaction);
@@ -2938,7 +2940,7 @@ class ManagerBotService {
         const selectedKey = String(selectedKeyRaw ?? "").trim();
         const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
         if (!entry?.bundle) {
-            await this.replyEphemeral(interaction, "Nao encontrei a aplicacao selecionada para transferir.");
+            await this.replyEphemeral(interaction, "Não encontrei a aplicação selecionada para transferir.");
             return;
         }
         this.rememberAppsPanelInteraction(interaction);
@@ -2951,7 +2953,7 @@ class ManagerBotService {
         const selectedKey = String(selectedKeyRaw ?? "").trim();
         const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
         if (!entry?.instance) {
-            await this.replyEphemeral(interaction, "Nao encontrei a aplicacao selecionada para deletar.");
+            await this.replyEphemeral(interaction, "Não encontrei a aplicação selecionada para deletar.");
             return;
         }
         this.rememberAppsPanelInteraction(interaction);
@@ -2966,11 +2968,11 @@ class ManagerBotService {
         try {
             const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
             if (!entry?.instance || !entry.discordApp) {
-                throw new Error("Aplicacao nao encontrada.");
+                throw new Error("Aplicação não encontrada.");
             }
             const desiredName = String(interaction.fields.getTextInputValue("apps_rename_name") ?? "").trim();
             if (!desiredName) {
-                throw new Error("Informe o novo nome da aplicacao.");
+                throw new Error("Informe o novo nome da aplicação.");
             }
             await this.dependencies.discordBotClient.updateBotUsername(entry.discordApp.botToken, desiredName);
             const inspection = await this.dependencies.discordBotClient.inspectBotToken(entry.discordApp.botToken);
@@ -2984,10 +2986,10 @@ class ManagerBotService {
             entry.instance.updatedAt = new Date().toISOString();
             await this.syncManagedInstanceRuntime(entry.instance, entry.discordApp);
             await this.persistStoreIfNeeded();
-            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "settings", "Nome da aplicacao atualizado com sucesso."));
+            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "settings", "Nome da aplicação atualizado com sucesso."));
         }
         catch (error) {
-            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "settings", `Falha ao alterar o nome da aplicacao: ${error?.message ?? "erro desconhecido"}`));
+            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "settings", `Falha ao alterar o nome da aplicação: ${error?.message ?? "erro desconhecido"}`));
         }
     }
     async handleAppsTokenModal(interaction) {
@@ -2999,7 +3001,7 @@ class ManagerBotService {
         try {
             const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
             if (!entry?.instance || !entry.discordApp) {
-                throw new Error("Aplicacao nao encontrada.");
+                throw new Error("Aplicação não encontrada.");
             }
             const nextToken = String(interaction.fields.getTextInputValue("apps_token_value") ?? "").trim();
             if (!nextToken) {
@@ -3017,10 +3019,10 @@ class ManagerBotService {
             entry.instance.updatedAt = new Date().toISOString();
             await this.syncManagedInstanceRuntime(entry.instance, entry.discordApp);
             await this.persistStoreIfNeeded();
-            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "settings", "Token da aplicacao atualizado com sucesso."));
+            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "settings", "Token da aplicação atualizado com sucesso."));
         }
         catch (error) {
-            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "settings", `Falha ao alterar o token da aplicacao: ${error?.message ?? "erro desconhecido"}`));
+            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "settings", `Falha ao alterar o token da aplicação: ${error?.message ?? "erro desconhecido"}`));
         }
     }
     async handleAppsOwnerModal(interaction) {
@@ -3032,11 +3034,11 @@ class ManagerBotService {
         try {
             const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
             if (!entry?.instance || !entry.discordApp) {
-                throw new Error("Aplicacao nao encontrada.");
+                throw new Error("Aplicação não encontrada.");
             }
             const nextOwnerDiscordUserId = String(interaction.fields.getTextInputValue("apps_owner_user_id") ?? "").trim();
             if (!/^\d{5,32}$/u.test(nextOwnerDiscordUserId)) {
-                throw new Error("Informe um Discord User ID valido.");
+                throw new Error("Informe um Discord User ID válido.");
             }
             entry.instance.config.ownerDiscordUserId = nextOwnerDiscordUserId;
             entry.discordApp.runtimeEnv = {
@@ -3061,14 +3063,14 @@ class ManagerBotService {
         try {
             const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
             if (!entry?.bundle?.subscription) {
-                throw new Error("Aplicacao nao encontrada.");
+                throw new Error("Aplicação não encontrada.");
             }
             const nextCommercialOwnerDiscordUserId = String(interaction.fields.getTextInputValue("apps_transfer_user_id") ?? "").trim();
             if (!/^\d{5,32}$/u.test(nextCommercialOwnerDiscordUserId)) {
-                throw new Error("Informe um Discord User ID valido.");
+                throw new Error("Informe um Discord User ID válido.");
             }
             if (nextCommercialOwnerDiscordUserId === String(entry.bundle.subscription.commercialOwnerDiscordUserId ?? "").trim()) {
-                throw new Error("Essa aplicacao ja pertence a esse usuario.");
+                throw new Error("Essa aplicação já pertence a esse usuário.");
             }
             entry.bundle.subscription.commercialOwnerDiscordUserId = nextCommercialOwnerDiscordUserId;
             entry.bundle.subscription.updatedAt = new Date().toISOString();
@@ -3076,10 +3078,10 @@ class ManagerBotService {
             if (interaction.guild) {
                 await this.tryGrantCustomerRole(interaction.guild, nextCommercialOwnerDiscordUserId).catch(() => null);
             }
-            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, null, "overview", `Posse da aplicacao transferida para <@${nextCommercialOwnerDiscordUserId}>. Ela nao aparecera mais no seu /apps.`));
+            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, null, "overview", `Posse da aplicação transferida para <@${nextCommercialOwnerDiscordUserId}>. Ela não aparecerá mais no seu /apps.`));
         }
         catch (error) {
-            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "settings", `Falha ao transferir a posse da aplicacao: ${error?.message ?? "erro desconhecido"}`));
+            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "settings", `Falha ao transferir a posse da aplicação: ${error?.message ?? "erro desconhecido"}`));
         }
     }
     async handleAppsDeleteModal(interaction) {
@@ -3091,7 +3093,7 @@ class ManagerBotService {
         try {
             const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
             if (!entry?.instance || !entry.bundle?.subscription) {
-                throw new Error("Aplicacao nao encontrada.");
+                throw new Error("Aplicação não encontrada.");
             }
             const confirmation = normalizeTextForMatch(interaction.fields.getTextInputValue("apps_delete_confirm"));
             const acceptedValues = new Set([
@@ -3101,16 +3103,16 @@ class ManagerBotService {
                 normalizeTextForMatch(entry.instance.hostingAppId),
             ]);
             if (!acceptedValues.has(confirmation)) {
-                throw new Error("Confirmacao invalida. Digite DELETAR ou o ID da aplicacao.");
+                throw new Error("Confirmação inválida. Digite DELETAR ou o ID da aplicação.");
             }
             await this.dependencies.instanceService.deleteBySubscription(entry.bundle.subscription.id);
             entry.bundle.subscription.status = "deleted";
             entry.bundle.subscription.updatedAt = new Date().toISOString();
             await this.persistStoreIfNeeded();
-            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, null, "overview", "Aplicacao deletada com sucesso."));
+            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, null, "overview", "Aplicação deletada com sucesso."));
         }
         catch (error) {
-            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "settings", `Falha ao deletar a aplicacao: ${error?.message ?? "erro desconhecido"}`));
+            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "settings", `Falha ao deletar a aplicação: ${error?.message ?? "erro desconhecido"}`));
         }
     }
     buildSalesPanelMessage(product = null) {
@@ -3993,11 +3995,11 @@ class ManagerBotService {
                 embeds: [
                     new discord_js_1.EmbedBuilder()
                         .setColor(0xdc2626)
-                        .setTitle("Suas aplicacoes")
+                        .setTitle("Suas aplicações")
                         .setDescription(this.limitMessageSize([
                         notice ?? null,
-                        "Voce nao tem nenhuma aplicacao liberada no seu /apps agora.",
-                        "Compras pendentes ou nao aprovadas ainda nao aparecem aqui.",
+                        "Você não tem nenhuma aplicação liberada no seu /apps agora.",
+                        "Compras pendentes ou não aprovadas ainda não aparecem aqui.",
                     ].filter(Boolean).join("\n\n"))),
                 ],
                 components: [],
@@ -4050,35 +4052,35 @@ class ManagerBotService {
         if (!entry) {
             return new discord_js_1.EmbedBuilder()
                 .setColor(0x2563eb)
-                .setTitle("Suas aplicacoes")
-                .setDescription("Selecione uma aplicacao para continuar.");
+                .setTitle("Suas aplicações")
+                .setDescription("Selecione uma aplicação para continuar.");
         }
         const instance = entry.instance;
         const bundle = entry.bundle;
         const metrics = this.extractAppsOverviewMetrics(instance, overview);
         const lines = [
-            notice ? `**Atualizacao**\n${notice}` : null,
+            notice ? `**Atualização**\n${notice}` : null,
             instance
                 ? [
-                    `**Aplicacao:** ${entry.displayName} (${bundle.product?.name ?? "Produto"})`,
+                    `**Aplicação:** ${entry.displayName} (${bundle.product?.name ?? "Produto"})`,
                     "",
-                    `\uD83D\uDFE2 | **Status**`,
+                    `🟢 | **Status**`,
                     metrics.status,
                     "",
-                    `\uD83D\uDDA5\uFE0F | **Cpu**`,
+                    `🖥️ | **CPU**`,
                     metrics.cpu,
-                    `\uD83D\uDCBE | **Memoria Ram**`,
+                    `💾 | **Memória RAM**`,
                     metrics.ram,
-                    `\uD83D\uDDD2\uFE0F | **SSD**`,
+                    `🗂️ | **SSD**`,
                     metrics.ssd,
-                    `\uD83C\uDF10 | **Network (Total)**`,
+                    `🌐 | **Network (Total)**`,
                     metrics.networkTotal,
-                    `\uD83C\uDF10 | **Network (Now)**`,
+                    `🌐 | **Network (Now)**`,
                     metrics.networkNow,
-                    `\u23F0 | **UpTime**`,
+                    `⏰ | **Uptime**`,
                     metrics.uptime,
                     "",
-                    `\uD83D\uDD53 | **Expira em**`,
+                    `🕓 | **Expira em**`,
                     `${this.formatIsoDate(instance.expiresAt)} (${this.formatRelativeTimestamp(instance.expiresAt)})`,
                     "",
                     metrics.error ? `Aviso da SquareCloud: ${metrics.error}` : null,
@@ -4087,21 +4089,21 @@ class ManagerBotService {
                     `\`${instance.id}\``,
                 ].filter(Boolean).join("\n")
                 : [
-                    `**Aplicacao:** ${entry.displayName} (${bundle.product?.name ?? "Produto"})`,
+                    `**Aplicação:** ${entry.displayName} (${bundle.product?.name ?? "Produto"})`,
                     "",
                     `Status da assinatura: **${this.getStatusLabel(bundle.subscription.status)}**`,
                     bundle.plan ? `Plano atual: **${bundle.plan.name}**` : null,
                     bundle.subscription.currentPeriodEnd
                         ? `Expira em: ${this.formatIsoDate(bundle.subscription.currentPeriodEnd)} (${this.formatRelativeTimestamp(bundle.subscription.currentPeriodEnd)})`
-                        : "Expira em: aguardando ativacao",
+                        : "Expira em: aguardando ativação",
                     entry.setupReady
-                        ? "Seu pagamento ja foi aprovado. Clique em **\uD83E\uDD16 Configurar Bot** para enviar nome, token e dono do bot."
-                        : "Essa compra ainda nao possui uma instancia provisionada.",
+                        ? "Seu pagamento já foi aprovado. Clique em **🤖 Configurar Bot** para enviar nome, token e dono do bot."
+                        : "Essa compra ainda não possui uma instância provisionada.",
                 ].filter(Boolean).join("\n"),
         ].filter(Boolean);
         const embed = new discord_js_1.EmbedBuilder()
             .setColor(instance?.status === "running" ? 0x22c55e : instance?.status === "suspended" ? 0xef4444 : 0x2563eb)
-            .setTitle("Manager | Suas Aplicacoes")
+            .setTitle("Manager | Suas Aplicações")
             .setDescription(this.limitMessageSize(lines.join("\n\n")));
         const imageUrl = String(bundle.product?.panelConfig?.imageUrl ?? "").trim();
         if (isLikelyHttpUrl(imageUrl)) {
@@ -4113,32 +4115,32 @@ class ManagerBotService {
         if (!entry) {
             return new discord_js_1.EmbedBuilder()
                 .setColor(0x6b7280)
-                .setTitle("Configuracoes da Aplicacao")
-                .setDescription("Selecione uma aplicacao para continuar.");
+                .setTitle("Configurações da Aplicação")
+                .setDescription("Selecione uma aplicação para continuar.");
         }
         const instance = entry.instance;
         const bundle = entry.bundle;
         const discordApp = entry.discordApp;
         const lines = [
-            notice ? `**Atualizacao**\n${notice}` : null,
-            `**Aplicacao:** ${entry.displayName}`,
+            notice ? `**Atualização**\n${notice}` : null,
+            `**Aplicação:** ${entry.displayName}`,
             `**Produto:** ${bundle.product?.name ?? "Produto"}`,
-            `**Plano:** ${bundle.plan?.name ?? "Nao definido"}`,
+            `**Plano:** ${bundle.plan?.name ?? "Não definido"}`,
             `**Status da assinatura:** ${this.getStatusLabel(bundle.subscription.status)}`,
             "",
-            `**Nome atual da aplicacao:** ${discordApp?.appName ?? instance?.config?.discordAppName ?? entry.displayName}`,
-            `**Application ID:** ${discordApp?.applicationId ?? instance?.config?.discordApplicationId ?? "nao definido"}`,
-            `**Client ID:** ${discordApp?.clientId ?? instance?.config?.discordClientId ?? "nao definido"}`,
-            `**Dono do bot:** ${instance?.config?.ownerDiscordUserId ? `<@${instance.config.ownerDiscordUserId}>` : "nao definido"}`,
-            `**Posse comercial:** ${bundle.subscription.commercialOwnerDiscordUserId ? `<@${bundle.subscription.commercialOwnerDiscordUserId}>` : "nao definido"}`,
-            `**SquareCloud App:** ${instance?.hostingAppId ?? "nao provisionada"}`,
+            `**Nome atual da aplicação:** ${discordApp?.appName ?? instance?.config?.discordAppName ?? entry.displayName}`,
+            `**Application ID:** ${discordApp?.applicationId ?? instance?.config?.discordApplicationId ?? "não definido"}`,
+            `**Client ID:** ${discordApp?.clientId ?? instance?.config?.discordClientId ?? "não definido"}`,
+            `**Dono do bot:** ${instance?.config?.ownerDiscordUserId ? `<@${instance.config.ownerDiscordUserId}>` : "não definido"}`,
+            `**Posse comercial:** ${bundle.subscription.commercialOwnerDiscordUserId ? `<@${bundle.subscription.commercialOwnerDiscordUserId}>` : "não definido"}`,
+            `**SquareCloud App:** ${instance?.hostingAppId ?? "não provisionada"}`,
             instance?.installUrl ? `**Link para adicionar seu bot:** ${instance.installUrl}` : null,
             "",
-            "Use os botoes abaixo para renomear, trocar token, alterar dono do bot, transferir a posse comercial ou deletar a aplicacao.",
+            "Use os botões abaixo para renomear, trocar token, alterar dono do bot, transferir a posse comercial ou deletar a aplicação.",
         ].filter(Boolean);
         return new discord_js_1.EmbedBuilder()
             .setColor(0x374151)
-            .setTitle("Configuracoes da Aplicacao")
+            .setTitle("Configurações da Aplicação")
             .setDescription(this.limitMessageSize(lines.join("\n")));
     }
     buildAppsOverviewComponents(entry, page) {
@@ -4161,7 +4163,7 @@ class ManagerBotService {
                     .setEmoji("\uD83D\uDD04")
                     .setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder()
                     .setCustomId(`${CUSTOM_IDS.appsViewPrefix}settings:${page}:${entry.key}`)
-                    .setLabel("Configuracoes")
+                    .setLabel("Configurações")
                     .setEmoji("\u2699\uFE0F")
                     .setStyle(discord_js_1.ButtonStyle.Secondary)),
             ];
@@ -4172,15 +4174,16 @@ class ManagerBotService {
                     .setCustomId(`${CUSTOM_IDS.appsSetupButtonPrefix}${page}:${entry.key}`)
                     .setLabel("Configurar Bot")
                     .setEmoji("\uD83E\uDD16")
-                    .setStyle(discord_js_1.ButtonStyle.Primary)),
-            ];
-            if (isLikelyHttpUrl(entry.bundle.product?.tutorialUrl)) {
-                rows.push(new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+                    .setStyle(discord_js_1.ButtonStyle.Primary), ...(isLikelyHttpUrl(entry.bundle.product?.tutorialUrl)
+                    ? [
+                        new discord_js_1.ButtonBuilder()
                     .setLabel("Tutorial")
                     .setEmoji("\uD83D\uDCF9")
                     .setStyle(discord_js_1.ButtonStyle.Link)
-                    .setURL(entry.bundle.product.tutorialUrl)));
-            }
+                    .setURL(entry.bundle.product.tutorialUrl),
+                    ]
+                    : [])),
+            ];
             return rows;
         }
         return [];
@@ -4192,7 +4195,7 @@ class ManagerBotService {
         const rows = [
             new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
                 .setCustomId(`${CUSTOM_IDS.appsRenamePrefix}${page}:${entry.key}`)
-                .setLabel("Alterar Nome da Aplicacao")
+                .setLabel("Alterar Nome da Aplicação")
                 .setEmoji("\u270F\uFE0F")
                 .setStyle(discord_js_1.ButtonStyle.Success), new discord_js_1.ButtonBuilder()
                 .setCustomId(`${CUSTOM_IDS.appsTokenPrefix}${page}:${entry.key}`)
@@ -4205,11 +4208,11 @@ class ManagerBotService {
                 .setStyle(discord_js_1.ButtonStyle.Secondary)),
             new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
                 .setCustomId(`${CUSTOM_IDS.appsTransferPrefix}${page}:${entry.key}`)
-                .setLabel("Transferir Posse da Aplicacao")
+                .setLabel("Transferir Posse da Aplicação")
                 .setEmoji("\uD83D\uDCCB")
                 .setStyle(discord_js_1.ButtonStyle.Danger), new discord_js_1.ButtonBuilder()
                 .setCustomId(`${CUSTOM_IDS.appsDeletePrefix}${page}:${entry.key}`)
-                .setLabel("Deletar Aplicacao")
+                .setLabel("Deletar Aplicação")
                 .setEmoji("\uD83D\uDDD1\uFE0F")
                 .setStyle(discord_js_1.ButtonStyle.Danger), entry.instance.installUrl
                 ? new discord_js_1.ButtonBuilder()
@@ -4237,7 +4240,7 @@ class ManagerBotService {
             const description = clampText(entry.instance
                 ? `${entry.bundle.product?.name ?? "Produto"} | ${this.getStatusLabel(entry.instance.status)}`
                 : entry.setupReady
-                    ? `${entry.bundle.product?.name ?? "Produto"} | aguardando configuracao`
+                    ? `${entry.bundle.product?.name ?? "Produto"} | aguardando configuração`
                     : `${entry.bundle.product?.name ?? "Produto"} | ${this.getStatusLabel(entry.bundle.subscription.status)}`, 100, entry.bundle.product?.name ?? "Produto");
             return new discord_js_1.StringSelectMenuOptionBuilder()
                 .setLabel(label)
@@ -4247,7 +4250,7 @@ class ManagerBotService {
         });
         return new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.StringSelectMenuBuilder()
             .setCustomId(`${CUSTOM_IDS.appsSelectPrefix}${page}:${view}`)
-            .setPlaceholder("Selecione uma aplicacao")
+            .setPlaceholder("Selecione uma aplicação")
             .addOptions(options));
     }
     buildAppsPaginationRow(page, pageCount, selectedKey, view) {
@@ -4261,7 +4264,7 @@ class ManagerBotService {
             .setStyle(discord_js_1.ButtonStyle.Secondary)
             .setDisabled(page <= 0), new discord_js_1.ButtonBuilder()
             .setCustomId(`${CUSTOM_IDS.appsPagePrefix}${page}:${selectedKey}:${view}:current`)
-            .setLabel(`Pagina ${page + 1}`)
+            .setLabel(`Página ${page + 1}`)
             .setStyle(discord_js_1.ButtonStyle.Success)
             .setDisabled(true), new discord_js_1.ButtonBuilder()
             .setCustomId(`${CUSTOM_IDS.appsPagePrefix}${Math.min(pageCount - 1, page + 1)}:${selectedKey}:${view}:next`)
@@ -4276,13 +4279,13 @@ class ManagerBotService {
     buildAppsRenameModal(page, entry) {
         const nameInput = new discord_js_1.TextInputBuilder()
             .setCustomId("apps_rename_name")
-            .setLabel("Novo nome da aplicacao")
+            .setLabel("Novo nome da aplicação")
             .setStyle(discord_js_1.TextInputStyle.Short)
             .setRequired(true)
             .setValue(String(entry.discordApp?.appName ?? entry.instance?.config?.discordAppName ?? entry.displayName).slice(0, 100));
         return new discord_js_1.ModalBuilder()
             .setCustomId(`${MODAL_IDS.appRenamePrefix}${page}:${entry.key}`)
-            .setTitle("Alterar Nome da Aplicacao")
+            .setTitle("Alterar Nome da Aplicação")
             .addComponents(new discord_js_1.ActionRowBuilder().addComponents(nameInput));
     }
     buildAppsTokenModal(page, entry) {
@@ -4318,19 +4321,19 @@ class ManagerBotService {
             .setValue(String(entry.bundle.subscription.commercialOwnerDiscordUserId ?? "").slice(0, 32));
         return new discord_js_1.ModalBuilder()
             .setCustomId(`${MODAL_IDS.appTransferPrefix}${page}:${entry.key}`)
-            .setTitle("Transferir Posse da Aplicacao")
+            .setTitle("Transferir Posse da Aplicação")
             .addComponents(new discord_js_1.ActionRowBuilder().addComponents(transferInput));
     }
     buildAppsDeleteModal(page, entry) {
         const deleteInput = new discord_js_1.TextInputBuilder()
             .setCustomId("apps_delete_confirm")
-            .setLabel("Digite DELETAR ou o ID da aplicacao")
+            .setLabel("Digite DELETAR ou o ID da aplicação")
             .setStyle(discord_js_1.TextInputStyle.Short)
             .setRequired(true)
             .setPlaceholder(entry.instance?.id ?? "DELETAR");
         return new discord_js_1.ModalBuilder()
             .setCustomId(`${MODAL_IDS.appDeletePrefix}${page}:${entry.key}`)
-            .setTitle("Deletar Aplicacao")
+            .setTitle("Deletar Aplicação")
             .addComponents(new discord_js_1.ActionRowBuilder().addComponents(deleteInput));
     }
     buildSubscribersEmbed(statusFilter = "all") {
@@ -4811,10 +4814,10 @@ class ManagerBotService {
         const hasCustomBioAddon = addonCodes.includes("custom-bio");
         const applicationNameInput = new discord_js_1.TextInputBuilder()
             .setCustomId("setup_application_name")
-            .setLabel("Nome do bot/aplicacao")
+            .setLabel("Nome do bot/aplicação")
             .setStyle(discord_js_1.TextInputStyle.Short)
             .setRequired(true)
-            .setPlaceholder("Digite o nome final do bot/aplicacao");
+            .setPlaceholder("Digite o nome final do bot/aplicação");
         const botTokenInput = new discord_js_1.TextInputBuilder()
             .setCustomId("setup_bot_token")
             .setLabel("Token do bot do cliente")

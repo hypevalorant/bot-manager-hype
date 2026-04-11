@@ -6,16 +6,14 @@ const SETUP_ACTION_TIMEOUT_MINUTES = 1;
 const SETUP_RETRY_COOLDOWN_MINUTES = 1;
 const DISCORD_DEVELOPER_PORTAL_URL = "https://discord.com/developers/applications";
 const PROCESSING_FACTS = [
-    "Fato: Voce fez uma excelente escolha e o deploy ja esta aquecendo na SquareCloud.",
-    "Curiosidade: o Discord foi lancado em 2015 e nasceu focado em comunidades de games.",
-    "Curiosidade aleatoria: telas de loading parecem mais rapidas quando ha feedback visual.",
-    "Fato rapido: privileged intents ativadas evitam falhas de inicializacao no bot.",
-    "Curiosidade: manter o token correto e as intents ligadas economiza muito retrabalho.",
+    "🔄 | Configurando o seu bot...",
+    "🔄 | Hospedando seu bot em nossa database...",
 ];
+const SETUP_COMPLETED_LABEL = "✅ | Bot ligado! Seu sistema já está funcionando, use /botsetup no seu servidor para efetuar as primeiras configurações!";
 const INTENT_LABELS = {
-    guild_presences: "Intencao de presenca",
-    guild_members: "Intencao dos membros do servidor",
-    message_content: "Intencao de conteudo da mensagem",
+    guild_presences: "Intenção de presença",
+    guild_members: "Intenção dos membros do servidor",
+    message_content: "Intenção do conteúdo das mensagens",
 };
 class PurchaseSetupError extends Error {
     statusCode;
@@ -51,7 +49,7 @@ class PurchaseSetupService {
                 ok: true,
                 setupRequired: false,
                 paymentStatus: context.payment.status,
-                message: "Este produto nao exige envio manual do token do bot.",
+                message: "Este produto não exige envio manual do token do bot.",
             };
         }
         if (context.payment.status !== "approved") {
@@ -63,7 +61,7 @@ class PurchaseSetupService {
                 developerPortalUrl: DISCORD_DEVELOPER_PORTAL_URL,
                 tutorialUrl: context.bundle.product?.tutorialUrl ?? null,
                 addonCodes: context.addons.map((addon) => addon.code),
-                message: "Aguarde a aprovacao do pagamento para liberar o envio do bot.",
+                message: "Aguarde a aprovação do pagamento para liberar o envio do bot.",
             };
         }
         const session = this.getOrCreateApprovedSession(context);
@@ -84,7 +82,7 @@ class PurchaseSetupService {
         const session = this.getOrCreateApprovedSession(context);
         this.refreshSessionStatus(session);
         if (session.status === "expired") {
-            throw new PurchaseSetupError("Interacao expirada.", 410, {
+            throw new PurchaseSetupError("Interação expirada.", 410, {
                 code: "interaction_expired",
             });
         }
@@ -98,7 +96,7 @@ class PurchaseSetupService {
             secondsUntilExpiration: (0, utils_js_1.secondsUntil)(session.actionExpiresAt),
         };
     }
-    async submitBotForProvisioning(paymentId, input) {
+    async submitBotForProvisioning(paymentId, input, options = {}) {
         const context = this.requireApprovedCustomerTokenSetup(paymentId);
         const session = this.getOrCreateApprovedSession(context);
         this.ensureCanSubmit(session);
@@ -107,17 +105,17 @@ class PurchaseSetupService {
         const ownerDiscordUserId = String(input.ownerDiscordUserId ?? "").trim();
         const customBioText = String(input.customBioText ?? "").trim();
         if (!desiredApplicationName) {
-            throw new PurchaseSetupError("Nome da aplicacao obrigatorio.", 400, {
+            throw new PurchaseSetupError("Nome da aplicação obrigatório.", 400, {
                 code: "application_name_required",
             });
         }
         if (!botToken) {
-            throw new PurchaseSetupError("Token do bot obrigatorio.", 400, {
+            throw new PurchaseSetupError("Token do bot obrigatório.", 400, {
                 code: "bot_token_required",
             });
         }
         if (ownerDiscordUserId && !/^\d{5,32}$/u.test(ownerDiscordUserId)) {
-            throw new PurchaseSetupError("Owner Discord User ID invalido.", 400, {
+            throw new PurchaseSetupError("Owner Discord User ID inválido.", 400, {
                 code: "owner_discord_user_id_invalid",
             });
         }
@@ -130,11 +128,16 @@ class PurchaseSetupService {
         session.status = "processing";
         this.touchSession(session);
         try {
+            session.lastProgressIndex = 0;
+            await options.onProgress?.({
+                stage: "configuring",
+                message: PROCESSING_FACTS[0],
+            });
             const inspection = await this.discordBotClient.inspectBotToken(botToken);
             const missingIntents = this.getMissingIntents(context.bundle.product?.requiredPrivilegedIntents ?? [], inspection.enabledPrivilegedIntents);
             if (missingIntents.length > 0) {
-                this.applyCooldown(session, "As intents nao estao ativas.");
-                throw new PurchaseSetupError("As intents nao estao ativas.", 400, {
+                this.applyCooldown(session, "As intents não estão ativas.");
+                throw new PurchaseSetupError("As intents não estão ativas.", 400, {
                     code: "missing_privileged_intents",
                     missingIntents,
                     missingIntentLabels: missingIntents.map((intent) => INTENT_LABELS[intent]),
@@ -150,6 +153,11 @@ class PurchaseSetupService {
             }
             const refreshedInspection = await this.discordBotClient.inspectBotToken(botToken);
             const resolvedName = desiredApplicationName || refreshedInspection.botUsername || refreshedInspection.applicationName;
+            session.lastProgressIndex = 1;
+            await options.onProgress?.({
+                stage: "hosting",
+                message: PROCESSING_FACTS[1],
+            });
             const instance = await this.instanceService.provisionCustomerOwnedBot(context.bundle.subscription, {
                 customerId: context.bundle.customer?.id ?? context.bundle.subscription.customerId,
                 productId: context.bundle.product?.id ?? context.bundle.subscription.productId,
@@ -178,6 +186,7 @@ class PurchaseSetupService {
             return {
                 ok: true,
                 status: this.buildPublicSetupStatus(session, context),
+                successMessage: SETUP_COMPLETED_LABEL,
                 validation: {
                     applicationId: refreshedInspection.applicationId,
                     botUserId: refreshedInspection.botUserId,
@@ -211,7 +220,7 @@ class PurchaseSetupService {
     getSetupContext(paymentId) {
         const payment = this.store.payments.find((item) => item.id === paymentId);
         if (!payment) {
-            throw new PurchaseSetupError("Pagamento nao encontrado.", 404, {
+            throw new PurchaseSetupError("Pagamento não encontrado.", 404, {
                 code: "payment_not_found",
             });
         }
@@ -233,17 +242,17 @@ class PurchaseSetupService {
     requireApprovedCustomerTokenSetup(paymentId) {
         const context = this.getSetupContext(paymentId);
         if (context.payment.purpose !== "activation") {
-            throw new PurchaseSetupError("Somente pagamentos de ativacao usam este fluxo.", 400, {
+            throw new PurchaseSetupError("Somente pagamentos de ativação usam este fluxo.", 400, {
                 code: "setup_not_supported_for_renewal",
             });
         }
         if (context.bundle.product?.botProvisioningMode !== "customer_token") {
-            throw new PurchaseSetupError("Este produto nao usa setup manual de token.", 400, {
+            throw new PurchaseSetupError("Este produto não usa setup manual de token.", 400, {
                 code: "setup_not_required",
             });
         }
         if (context.payment.status !== "approved") {
-            throw new PurchaseSetupError("Pagamento ainda nao aprovado.", 409, {
+            throw new PurchaseSetupError("Pagamento ainda não aprovado.", 409, {
                 code: "payment_not_approved",
             });
         }
@@ -283,7 +292,7 @@ class PurchaseSetupService {
     ensureCanSubmit(session) {
         this.refreshSessionStatus(session);
         if (session.status === "expired") {
-            throw new PurchaseSetupError("Interacao expirada.", 410, {
+            throw new PurchaseSetupError("Interação expirada.", 410, {
                 code: "interaction_expired",
             });
         }
@@ -362,6 +371,7 @@ class PurchaseSetupService {
             nextProcessingFact: session.status === "processing"
                 ? PROCESSING_FACTS[(session.lastProgressIndex + 1) % PROCESSING_FACTS.length]
                 : null,
+            completedMessage: session.status === "completed" ? SETUP_COMPLETED_LABEL : null,
             completed: session.status === "completed",
             canSubmit: session.status === "awaiting_submission" ||
                 (session.status === "cooldown" && retryAfterSeconds === 0),

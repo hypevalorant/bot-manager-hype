@@ -29,7 +29,7 @@ class InstanceService {
     formatSaleDateLabel(isoDate) {
         const date = new Date(isoDate);
         if (!Number.isFinite(date.getTime())) {
-            return "data-nao-informada";
+            return "data-não-informada";
         }
         const day = String(date.getUTCDate()).padStart(2, "0");
         const month = String(date.getUTCMonth() + 1).padStart(2, "0");
@@ -37,7 +37,7 @@ class InstanceService {
         return `${day}-${month}-${year}`;
     }
     buildManagedSaleDescription(sequenceLabel, purchaserDiscordUserId, soldAt) {
-        return `Aplicacao ID ${sequenceLabel} - ${String(purchaserDiscordUserId ?? "").trim() || "sem-comprador"} - ${this.formatSaleDateLabel(soldAt)}`.slice(0, 120);
+        return `Aplicação ID ${sequenceLabel} - ${String(purchaserDiscordUserId ?? "").trim() || "sem-comprador"} - ${this.formatSaleDateLabel(soldAt)}`.slice(0, 120);
     }
     buildRuntimePayload(instance, subscription) {
         const customer = this.store.customers.find((item) => item.id === subscription.customerId) ?? null;
@@ -88,29 +88,35 @@ class InstanceService {
     }
     async provision(subscription) {
         const existing = this.store.instances.find((instance) => instance.subscriptionId === subscription.id);
-        if (existing) {
+        if (existing && String(existing.status ?? "").toLowerCase() !== "failed") {
             return existing;
         }
         const product = this.store.products.find((item) => item.id === subscription.productId);
         if (!product) {
-            throw new Error("Produto da assinatura nao encontrado.");
+            throw new Error("Produto da assinatura não encontrado.");
         }
         if (product.botProvisioningMode !== "app_pool") {
             throw new Error("Este produto exige que o cliente envie o token do bot antes do provisionamento.");
         }
         const app = this.appPoolService.allocate(product.id);
+        if (existing) {
+            return this.reprovisionExistingInstance(existing, subscription, product.slug, product.sourceSlug, app);
+        }
         return this.createAndProvisionInstance(subscription, product.slug, product.sourceSlug, app);
     }
     async provisionCustomerOwnedBot(subscription, input) {
         const existing = this.store.instances.find((instance) => instance.subscriptionId === subscription.id);
-        if (existing) {
+        if (existing && String(existing.status ?? "").toLowerCase() !== "failed") {
             return existing;
         }
         const product = this.store.products.find((item) => item.id === subscription.productId);
         if (!product) {
-            throw new Error("Produto da assinatura nao encontrado.");
+            throw new Error("Produto da assinatura não encontrado.");
         }
         const app = this.registerCustomerProvidedDiscordApp(input);
+        if (existing) {
+            return this.reprovisionExistingInstance(existing, subscription, product.slug, product.sourceSlug, app, input.ownerDiscordUserId ?? null);
+        }
         return this.createAndProvisionInstance(subscription, product.slug, product.sourceSlug, app, input.ownerDiscordUserId ?? null);
     }
     getById(instanceId) {
@@ -125,7 +131,7 @@ class InstanceService {
     setAssignedGuild(instanceId, guildId) {
         const instance = this.getById(instanceId);
         if (!instance) {
-            throw new Error("Instancia nao encontrada.");
+            throw new Error("Instância não encontrada.");
         }
         instance.assignedGuildId = guildId;
         instance.updatedAt = (0, utils_js_1.nowIso)();
@@ -176,14 +182,14 @@ class InstanceService {
     async updateRuntime(instanceIdOrHostingAppId) {
         const instance = this.getById(instanceIdOrHostingAppId) ?? this.getByHostingAppId(instanceIdOrHostingAppId);
         if (!instance) {
-            throw new Error("Instancia nao encontrada.");
+            throw new Error("Instância não encontrada.");
         }
         if (!this.provisioningService?.isConfigured()) {
-            throw new Error("SquareCloud nao configurada para atualizar a instancia.");
+            throw new Error("SquareCloud não configurada para atualizar a instância.");
         }
         const discordApp = this.store.discordApps.find((entry) => entry.id === instance.discordAppId);
         if (!discordApp) {
-            throw new Error("App do Discord vinculada a essa instancia nao encontrada.");
+            throw new Error("App do Discord vinculada a essa instância não encontrada.");
         }
         const subscription = this.store.subscriptions.find((entry) => entry.id === instance.subscriptionId);
         const product = subscription ? this.store.products.find((entry) => entry.id === subscription.productId) : null;
@@ -201,11 +207,11 @@ class InstanceService {
     heartbeat(instanceId, instanceSecret, metrics) {
         const instance = this.getById(instanceId);
         if (!instance || instance.instanceSecret !== instanceSecret) {
-            throw new Error("Credenciais da instancia invalidas.");
+            throw new Error("Credenciais da instância inválidas.");
         }
         const subscription = this.store.subscriptions.find((item) => item.id === instance.subscriptionId);
         if (!subscription) {
-            throw new Error("Assinatura da instancia nao encontrada.");
+            throw new Error("Assinatura da instância não encontrada.");
         }
         instance.lastHeartbeatAt = (0, utils_js_1.nowIso)();
         instance.updatedAt = instance.lastHeartbeatAt;
@@ -221,11 +227,11 @@ class InstanceService {
     bootstrap(instanceId, instanceSecret) {
         const instance = this.getById(instanceId);
         if (!instance || instance.instanceSecret !== instanceSecret) {
-            throw new Error("Credenciais da instancia invalidas.");
+            throw new Error("Credenciais da instância inválidas.");
         }
         const subscription = this.store.subscriptions.find((item) => item.id === instance.subscriptionId);
         if (!subscription) {
-            throw new Error("Assinatura da instancia nao encontrada.");
+            throw new Error("Assinatura da instância não encontrada.");
         }
         return {
             ok: true,
@@ -262,12 +268,12 @@ class InstanceService {
         this.store.discordApps.push(app);
         return app;
     }
-    async createAndProvisionInstance(subscription, productSlug, sourceSlug, app, ownerDiscordUserId) {
+    applyInstanceProvisioningMetadata(instance, subscription, productSlug, sourceSlug, app, ownerDiscordUserId) {
         const timestamp = (0, utils_js_1.nowIso)();
         const customer = this.store.customers.find((item) => item.id === subscription.customerId) ?? null;
-        const saleSequenceNumber = this.getNextSaleSequenceNumber();
-        const saleSequenceLabel = this.formatSaleSequenceLabel(saleSequenceNumber);
-        const soldAt = String(subscription.createdAt ?? timestamp).trim() || timestamp;
+        const soldAt = String(instance?.soldAt ?? instance?.config?.soldAt ?? subscription.createdAt ?? timestamp).trim() || timestamp;
+        const saleSequenceNumber = Math.max(1, Number(instance?.saleSequenceNumber ?? instance?.config?.saleSequenceNumber ?? this.getNextSaleSequenceNumber()) || 1);
+        const saleSequenceLabel = String(instance?.config?.saleSequenceLabel ?? this.formatSaleSequenceLabel(saleSequenceNumber)).trim() || this.formatSaleSequenceLabel(saleSequenceNumber);
         const purchaserDiscordUserId = String(subscription.commercialOwnerDiscordUserId ?? customer?.discordUserId ?? "").trim() || null;
         const purchaserDiscordUsername = String(customer?.discordUsername ?? "").trim() || null;
         const managedSquareCloudDescription = this.buildManagedSaleDescription(saleSequenceLabel, purchaserDiscordUserId, soldAt);
@@ -275,6 +281,78 @@ class InstanceService {
             clientId: app.clientId,
             permissions: this.defaultPermissions,
         });
+        instance.subscriptionId = subscription.id;
+        instance.discordAppId = app.id;
+        instance.sourceSlug = sourceSlug;
+        instance.hostingProvider = "squarecloud";
+        instance.hostingAccountId = this.squareCloudAccountId ?? null;
+        instance.installUrl = installUrl;
+        instance.saleSequenceNumber = saleSequenceNumber;
+        instance.soldAt = soldAt;
+        instance.managedSquareCloudDescription = managedSquareCloudDescription;
+        instance.status = "provisioning";
+        instance.expiresAt = subscription.currentPeriodEnd ?? instance.expiresAt ?? timestamp;
+        instance.updatedAt = timestamp;
+        instance.config = {
+            ...(instance.config ?? {}),
+            locale: "pt-BR",
+            ownerDiscordUserId: String(ownerDiscordUserId ?? "").trim() || subscription.commercialOwnerDiscordUserId,
+            commercialOwnerDiscordUserId: String(subscription.commercialOwnerDiscordUserId ?? "").trim() || purchaserDiscordUserId,
+            purchaserDiscordUserId,
+            purchaserDiscordUsername,
+            customerId: subscription.customerId,
+            subscriptionId: subscription.id,
+            saleSequenceNumber,
+            saleSequenceLabel,
+            soldAt,
+            managedSquareCloudDescription,
+            productSlug,
+            discordClientId: app.clientId,
+            discordApplicationId: app.applicationId,
+            discordAppName: app.appName,
+        };
+        if (!instance.hostingAppId) {
+            instance.hostingAppId = `pending-${(0, utils_js_1.makeId)().replaceAll("-", "").slice(0, 12)}`;
+        }
+        return instance;
+    }
+    async finishProvisioning(instance, app) {
+        if (!this.provisioningService?.isConfigured()) {
+            instance.hostingAppId = String(instance.hostingAppId ?? "").startsWith("pending-")
+                ? `sqc-${(0, utils_js_1.makeId)().replaceAll("-", "").slice(0, 24)}`
+                : instance.hostingAppId;
+            instance.status = "running";
+            instance.updatedAt = (0, utils_js_1.nowIso)();
+            return instance;
+        }
+        try {
+            const hasRealHostingApp = Boolean(instance.hostingAppId) && !String(instance.hostingAppId).startsWith("pending-");
+            const provisioning = hasRealHostingApp
+                ? await this.provisioningService.updateInstance(instance, app)
+                : await this.provisioningService.provisionInstance(instance, app);
+            instance.hostingAppId = provisioning.appId;
+            instance.status = "running";
+            instance.updatedAt = (0, utils_js_1.nowIso)();
+            return instance;
+        }
+        catch (error) {
+            const partialAppId = String(error?.squareCloudAppId ?? "").trim();
+            if (partialAppId) {
+                instance.hostingAppId = partialAppId;
+            }
+            instance.status = "failed";
+            instance.updatedAt = (0, utils_js_1.nowIso)();
+            this.appPoolService.release(instance.discordAppId);
+            throw error;
+        }
+    }
+    async reprovisionExistingInstance(instance, subscription, productSlug, sourceSlug, app, ownerDiscordUserId) {
+        this.applyInstanceProvisioningMetadata(instance, subscription, productSlug, sourceSlug, app, ownerDiscordUserId);
+        return this.finishProvisioning(instance, app);
+    }
+    async createAndProvisionInstance(subscription, productSlug, sourceSlug, app, ownerDiscordUserId) {
+        const timestamp = (0, utils_js_1.nowIso)();
+        const saleSequenceNumber = this.getNextSaleSequenceNumber();
         const instance = {
             id: (0, utils_js_1.makeId)(),
             subscriptionId: subscription.id,
@@ -284,56 +362,23 @@ class InstanceService {
             hostingProvider: "squarecloud",
             hostingAccountId: this.squareCloudAccountId ?? null,
             hostingAppId: `pending-${(0, utils_js_1.makeId)().replaceAll("-", "").slice(0, 12)}`,
-            installUrl,
+            installUrl: null,
             instanceSecret: (0, utils_js_1.makeSecret)(),
             assignedGuildId: null,
             saleSequenceNumber,
-            soldAt,
-            managedSquareCloudDescription,
+            soldAt: String(subscription.createdAt ?? timestamp).trim() || timestamp,
+            managedSquareCloudDescription: "",
             status: "provisioning",
             configVersion: 1,
-            config: {
-                locale: "pt-BR",
-                ownerDiscordUserId: String(ownerDiscordUserId ?? "").trim() || subscription.commercialOwnerDiscordUserId,
-                commercialOwnerDiscordUserId: String(subscription.commercialOwnerDiscordUserId ?? "").trim() || purchaserDiscordUserId,
-                purchaserDiscordUserId,
-                purchaserDiscordUsername,
-                customerId: subscription.customerId,
-                subscriptionId: subscription.id,
-                saleSequenceNumber,
-                saleSequenceLabel,
-                soldAt,
-                managedSquareCloudDescription,
-                productSlug,
-                discordClientId: app.clientId,
-                discordApplicationId: app.applicationId,
-                discordAppName: app.appName,
-            },
+            config: {},
             lastHeartbeatAt: null,
             expiresAt: subscription.currentPeriodEnd ?? timestamp,
             createdAt: timestamp,
             updatedAt: timestamp,
         };
+        this.applyInstanceProvisioningMetadata(instance, subscription, productSlug, sourceSlug, app, ownerDiscordUserId);
         this.store.instances.push(instance);
-        if (!this.provisioningService?.isConfigured()) {
-            instance.hostingAppId = `sqc-${(0, utils_js_1.makeId)().replaceAll("-", "").slice(0, 24)}`;
-            instance.status = "running";
-            instance.updatedAt = (0, utils_js_1.nowIso)();
-            return instance;
-        }
-        try {
-            const provisioning = await this.provisioningService.provisionInstance(instance, app);
-            instance.hostingAppId = provisioning.appId;
-            instance.status = "running";
-            instance.updatedAt = (0, utils_js_1.nowIso)();
-            return instance;
-        }
-        catch (error) {
-            instance.status = "failed";
-            instance.updatedAt = (0, utils_js_1.nowIso)();
-            this.appPoolService.release(instance.discordAppId);
-            throw error;
-        }
+        return this.finishProvisioning(instance, app);
     }
 }
 exports.InstanceService = InstanceService;

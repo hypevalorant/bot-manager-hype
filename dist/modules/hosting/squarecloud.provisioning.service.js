@@ -77,11 +77,11 @@ class SquareCloudProvisioningService {
         const day = String(Number.isFinite(soldAt.getTime()) ? soldAt.getUTCDate() : 0).padStart(2, "0");
         const month = String(Number.isFinite(soldAt.getTime()) ? soldAt.getUTCMonth() + 1 : 0).padStart(2, "0");
         const year = String(Number.isFinite(soldAt.getTime()) ? soldAt.getUTCFullYear() : 0);
-        return `Aplicacao ID ${sequenceLabel} - ${purchaserDiscordUserId} - ${day}-${month}-${year}`.slice(0, 120);
+        return `Aplicação ID ${sequenceLabel} - ${purchaserDiscordUserId} - ${day}-${month}-${year}`.slice(0, 120);
     }
     async provisionInstance(instance, discordApp) {
         if (!this.squareCloudClient.isConfigured()) {
-            throw new Error("SquareCloud nao configurada para provisionamento real.");
+            throw new Error("SquareCloud não configurada para provisionamento real.");
         }
         const overrides = {
             displayName: discordApp.appName,
@@ -92,13 +92,21 @@ class SquareCloudProvisioningService {
         const runtimeOptions = this.sourceArtifactService.getRuntimeOptions(instance.sourceSlug, overrides);
         const upload = await this.squareCloudClient.uploadApplication(artifact.fileBuffer, artifact.fileName);
         const appId = upload.response.id;
-        await this.squareCloudClient.setAppEnvVars(appId, this.buildRuntimeEnv({
-            appId,
-            discordApp,
-            instance,
-            runtimeOptions,
-        }));
-        await this.squareCloudClient.startApp(appId);
+        try {
+            await this.squareCloudClient.setAppEnvVars(appId, this.buildRuntimeEnv({
+                appId,
+                discordApp,
+                instance,
+                runtimeOptions,
+            }));
+            await this.squareCloudClient.startApp(appId);
+        }
+        catch (error) {
+            if (error && typeof error === "object") {
+                error.squareCloudAppId = appId;
+            }
+            throw error;
+        }
         return {
             appId,
             upload,
@@ -106,10 +114,10 @@ class SquareCloudProvisioningService {
     }
     async updateInstance(instance, discordApp) {
         if (!this.squareCloudClient.isConfigured()) {
-            throw new Error("SquareCloud nao configurada para atualizacao real.");
+            throw new Error("SquareCloud não configurada para atualização real.");
         }
         if (!instance.hostingAppId || instance.hostingAppId.startsWith("pending-")) {
-            throw new Error("A instancia ainda nao possui uma app real para atualizar.");
+            throw new Error("A instância ainda não possui uma app real para atualizar.");
         }
         const overrides = {
             displayName: discordApp.appName,
@@ -119,13 +127,21 @@ class SquareCloudProvisioningService {
         const artifact = await this.sourceArtifactService.getArtifact(instance.sourceSlug, overrides);
         const runtimeOptions = this.sourceArtifactService.getRuntimeOptions(instance.sourceSlug, overrides);
         const commit = await this.squareCloudClient.commitApplication(instance.hostingAppId, artifact.fileBuffer, artifact.fileName);
-        await this.squareCloudClient.setAppEnvVars(instance.hostingAppId, this.buildRuntimeEnv({
-            appId: instance.hostingAppId,
-            discordApp,
-            instance,
-            runtimeOptions,
-        }));
-        await this.squareCloudClient.restartApp(instance.hostingAppId);
+        try {
+            await this.squareCloudClient.setAppEnvVars(instance.hostingAppId, this.buildRuntimeEnv({
+                appId: instance.hostingAppId,
+                discordApp,
+                instance,
+                runtimeOptions,
+            }));
+            await this.squareCloudClient.restartApp(instance.hostingAppId);
+        }
+        catch (error) {
+            if (error && typeof error === "object") {
+                error.squareCloudAppId = instance.hostingAppId;
+            }
+            throw error;
+        }
         return {
             appId: instance.hostingAppId,
             commit,

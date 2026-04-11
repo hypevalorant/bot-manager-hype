@@ -17,7 +17,7 @@ const startedAt = Date.now();
 function requireEnv(name) {
   const value = String(process.env[name] || "").trim();
   if (!value) {
-    throw new Error(name + " e obrigatoria para o runtime gerenciado.");
+    throw new Error(name + " é obrigatória para o runtime gerenciado.");
   }
   return value;
 }
@@ -108,12 +108,12 @@ function buildRuntimeSummary(payload) {
 }
 
 function logRuntimeSummary(label, payload) {
-  console.log("[managed-runtime] " + label + ":", JSON.stringify(buildRuntimeSummary(payload), null, 2));
+  console.log("[runtime-gerenciado] " + label + ":", JSON.stringify(buildRuntimeSummary(payload), null, 2));
 }
 
 function spawnBotProcess() {
   const entrypoint = resolveEntrypoint();
-  console.log("[managed-runtime] iniciando source em", entrypoint);
+  console.log("[runtime-gerenciado] iniciando a source em", entrypoint);
 
   childProcess = spawn(process.execPath, [entrypoint], {
     cwd: process.cwd(),
@@ -128,7 +128,7 @@ function spawnBotProcess() {
     }
 
     console.error(
-      "[managed-runtime] processo da source encerrou inesperadamente",
+      "[runtime-gerenciado] processo da source encerrou inesperadamente",
       JSON.stringify({ code, signal }),
     );
     process.exit(code ?? 1);
@@ -141,7 +141,7 @@ function requestShutdown(reason) {
   }
 
   shutdownRequested = true;
-  console.warn("[managed-runtime] encerrando source:", reason);
+  console.warn("[runtime-gerenciado] encerrando source:", reason);
 
   if (childProcess && !childProcess.killed) {
     childProcess.kill("SIGTERM");
@@ -184,13 +184,13 @@ async function main() {
   });
 
   syncBootstrapEnv(bootstrap);
-  logRuntimeSummary("contexto da aplicacao vendida", bootstrap);
+  logRuntimeSummary("contexto da aplicação vendida", bootstrap);
   spawnBotProcess();
   await sendHeartbeat();
 
   const interval = setInterval(() => {
     sendHeartbeat().catch((error) => {
-      console.error("[managed-runtime] heartbeat falhou:", error);
+      console.error("[runtime-gerenciado] heartbeat falhou:", error);
     });
   }, heartbeatIntervalMs);
   interval.unref();
@@ -200,7 +200,7 @@ process.on("SIGTERM", () => requestShutdown("SIGTERM"));
 process.on("SIGINT", () => requestShutdown("SIGINT"));
 
 main().catch((error) => {
-  console.error("[managed-runtime] bootstrap falhou:", error);
+  console.error("[runtime-gerenciado] bootstrap falhou:", error);
   process.exit(1);
 });
 `;
