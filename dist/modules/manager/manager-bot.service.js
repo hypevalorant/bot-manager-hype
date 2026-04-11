@@ -772,11 +772,16 @@ class ManagerBotService {
                 return;
             }
             const fallbackMessages = {
-                "auto-restart": "⚡ | O bot reinicia automaticamente em caso de erro. Nao se preocupe em pagar a mais por isso.",
-                "custom-qr": "🖼️ | O QR Code personalizado com a logo do seu servidor ja faz parte do pacote, sem custo extra.",
-                "priority-support": "🛡️ | Atualmente nao oferecemos suporte prioritario exclusivo, mas nossa equipe estara sempre disponivel para ajudar, sem cobrar a mais por isso.",
+                "auto-restart": "⚡ | O bot reinicia automaticamente em caso de erro. Não se preocupe em pagar a mais por isso.",
+                "custom-qr": "🖼️ | O QR Code personalizado com a logo do seu servidor já faz parte do pacote, sem custo extra.",
+                "priority-support": "🛡️ | Atualmente não oferecemos um suporte prioritário exclusivo, mas nossa equipe estará sempre disponível para ajudar você, não cobraremos a mais por isso.",
             };
-            await this.replyEphemeral(interaction, addon?.description ?? fallbackMessages[addonCode] ?? "Esse botao e apenas informativo.");
+            const informationalMessages = {
+                "auto-restart": "⚡ | O bot reinicia automaticamente em caso de erro. Não se preocupe em pagar a mais por isso.\n-# Além disso, conte conosco para solucionar eventuais problemas.",
+                "custom-qr": "🖼️ | O QR Code personalizado com a logo do seu servidor já faz parte do pacote, sem custo extra.",
+                "priority-support": "🛡️ | Atualmente não oferecemos um suporte prioritário exclusivo, mas nossa equipe estará sempre disponível para ajudar você, não cobraremos a mais por isso.",
+            };
+            await this.replyEphemeral(interaction, informationalMessages[addonCode] ?? addon?.description ?? fallbackMessages[addonCode] ?? "Esse botão é apenas informativo.");
             return;
         }
         if (interaction.customId.startsWith(CUSTOM_IDS.cartCancelPrefix)) {
@@ -3196,11 +3201,16 @@ class ManagerBotService {
         const selectedPlan = this.getCartSelectedPlan(product, state);
         const selectedAddons = this.getCartSelectedAddons(product, state);
         const totalAmountCents = this.calculateCartTotalCents(product, state);
-        const inactivityMinutes = Math.max(1, Number(this.dependencies.managerRuntimeConfigService.getResolvedSalesSettings().cartInactivityMinutes ?? 5));
+        const compactCurrency = (amountCents, currency = "BRL") => this.formatCurrency(amountCents, currency).replace(/\s+/gu, "");
+        const configuredPanelTitle = String(product?.panelConfig?.title ?? "").trim();
+        const cartTitleBase = configuredPanelTitle
+            ? String(configuredPanelTitle.split("|")[0] ?? configuredPanelTitle).trim()
+            : String(product?.name ?? "Manager").trim();
+        const cartTitle = `${cartTitleBase || "Manager"} | Carrinho`;
         const addonsSummaryBlock = [
             "```diff",
             ...(selectedAddons.length > 0
-                ? selectedAddons.map((addon) => `+ ${addon.name}${addon.priceCents > 0 ? `  +${this.formatCurrency(addon.priceCents)}` : ""}`)
+                ? selectedAddons.map((addon) => `+ ${addon.name}${addon.priceCents > 0 ? `  +${compactCurrency(addon.priceCents, addon.currency ?? "BRL")}` : ""}`)
                 : ["+ Nenhum"]),
             "```",
         ].join("\n");
@@ -3212,44 +3222,42 @@ class ManagerBotService {
                 `<@${user.id}> (editado)`,
                 "",
                 "**Resumo da compra**",
-                `${product.name} (${selectedPlan?.durationDays ?? 0} dias) - **${this.formatCurrency(selectedPlan?.priceCents ?? 0)}**`,
+                `${product.name} (${selectedPlan?.durationDays ?? 0} dias) - **${compactCurrency(selectedPlan?.priceCents ?? 0, selectedPlan?.currency ?? "BRL")}**`,
                 "",
                 "**Adicionais**",
                 addonsSummaryBlock,
-                "",
                 "**Valor a pagar**",
-                `**${this.formatCurrency(totalAmountCents)}**`,
+                `**${compactCurrency(totalAmountCents)}**`,
             ].join("\n")));
             if (isLikelyHttpUrl(product?.panelConfig?.imageUrl)) {
                 embed.setThumbnail(product.panelConfig.imageUrl);
             }
             return embed;
         }
-        return new discord_js_1.EmbedBuilder()
+        const embed = new discord_js_1.EmbedBuilder()
             .setColor(this.resolveProductPanelColor(product, 0x2563eb))
-            .setTitle(`${product.name} | Carrinho`)
+            .setTitle(cartTitle)
             .setDescription(this.limitMessageSize([
-            `👋 | Ola <@${user.id}>`,
-            "• Selecione um plano para seu bot.",
-            `â€¢ O carrinho fecha automaticamente apos ${inactivityMinutes} minuto(s) sem atividade.`,
-        ].join("\n")))
-            .setDescription(this.limitMessageSize([
-            `Ola <@${user.id}>`,
-            "Selecione um plano para seu bot.",
+            `👋 | Olá <@${user.id}>,`,
+            "• **Selecione um plano para seu bot.**",
         ].join("\n")))
             .addFields({
             name: "Produto",
-            value: product.name,
+            value: `\`\`\`${product.name}\`\`\``,
             inline: false,
         }, {
-            name: "Preco",
-            value: this.formatCurrency(selectedPlan?.priceCents ?? 0),
+            name: "Preço",
+            value: compactCurrency(selectedPlan?.priceCents ?? 0, selectedPlan?.currency ?? "BRL"),
             inline: true,
         }, {
-            name: "Duracao",
+            name: "Duração",
             value: `${selectedPlan?.durationDays ?? 0} dias`,
             inline: true,
         });
+        if (isLikelyHttpUrl(product?.panelConfig?.imageUrl)) {
+            embed.setThumbnail(product.panelConfig.imageUrl);
+        }
+        return embed;
     }
     buildCartPanelComponents(product, ownerUserId, rawState) {
         const state = this.normalizeCartState(rawState, product);
@@ -3266,11 +3274,11 @@ class ManagerBotService {
                     .setEmoji("\u26A1")
                     .setStyle(discord_js_1.ButtonStyle.Primary), new discord_js_1.ButtonBuilder()
                     .setCustomId(`${CUSTOM_IDS.cartAddonInfoPrefix}custom-qr:${ownerUserId}:${product.slug}`)
-                    .setLabel("QrCode Personalizado")
+                    .setLabel("QR Code Personalizado")
                     .setEmoji("\uD83D\uDDBC\uFE0F")
                     .setStyle(discord_js_1.ButtonStyle.Primary), new discord_js_1.ButtonBuilder()
                     .setCustomId(`${CUSTOM_IDS.cartAddonInfoPrefix}priority-support:${ownerUserId}:${product.slug}`)
-                    .setLabel("Suporte Prioritario")
+                    .setLabel("Suporte Prioritário")
                     .setEmoji("\uD83D\uDEE1\uFE0F")
                     .setStyle(discord_js_1.ButtonStyle.Primary)),
                 new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
