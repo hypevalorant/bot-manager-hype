@@ -308,7 +308,7 @@ class ManagerRuntimeConfigService {
             cartStaffRoleIds: normalizeIdList(sales.cartStaffRoleIds),
             logsChannelId: normalizeIdList(sales.logsChannelId)[0] ?? null,
             cartInactivityMinutes: Math.min(5, Math.max(1, normalizeOptionalNumber(sales.cartInactivityMinutes) ?? 5)),
-            cartChannelNameTemplate: normalizeOptionalString(sales.cartChannelNameTemplate) ?? "carrinho-{user}",
+            cartChannelNameTemplate: normalizeOptionalString(sales.cartChannelNameTemplate) ?? "🛒・{guild}",
             autoAssignCustomerRole: normalizeOptionalBoolean(sales.autoAssignCustomerRole) ?? true,
         };
     }
@@ -331,7 +331,7 @@ class ManagerRuntimeConfigService {
             sales.cartInactivityMinutes = Math.min(5, Math.max(1, normalizeOptionalNumber(input.cartInactivityMinutes) ?? 5));
         }
         if (input.cartChannelNameTemplate !== undefined) {
-            sales.cartChannelNameTemplate = normalizeOptionalString(input.cartChannelNameTemplate) ?? "carrinho-{user}";
+            sales.cartChannelNameTemplate = normalizeOptionalString(input.cartChannelNameTemplate) ?? "🛒・{guild}";
         }
         if (input.autoAssignCustomerRole !== undefined) {
             sales.autoAssignCustomerRole = normalizeOptionalBoolean(input.autoAssignCustomerRole) ?? true;

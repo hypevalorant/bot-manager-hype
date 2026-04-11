@@ -33,7 +33,7 @@ function createEmptyManagerRuntimeConfig() {
             cartStaffRoleIds: [],
             logsChannelId: null,
             cartInactivityMinutes: 5,
-            cartChannelNameTemplate: "carrinho-{user}",
+            cartChannelNameTemplate: "🛒・{guild}",
             autoAssignCustomerRole: true,
         },
         sources: {

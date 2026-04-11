@@ -2,12 +2,14 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const env_js_1 = require("./core/env.js");
 const app_js_1 = require("./app.js");
+const logger_js_1 = require("./core/logger.js");
 const manager_bot_config_js_1 = require("./modules/manager/manager-bot.config.js");
 const manager_bot_service_js_1 = require("./modules/manager/manager-bot.service.js");
 (0, env_js_1.loadEnvFile)();
 async function main() {
     const services = await (0, app_js_1.createServices)();
-    const app = await (0, app_js_1.buildApp)(services);
+    const logger = (0, logger_js_1.createAppLogger)("Bot Manager Hype");
+    const app = await (0, app_js_1.buildApp)(services, logger);
     const managerBotService = new manager_bot_service_js_1.ManagerBotService({
         billingService: services.billingService,
         catalogService: services.catalogService,
@@ -28,14 +30,14 @@ async function main() {
         try {
             const changes = await services.subscriptionService.runExpirationCycle(new Date());
             if (changes.length > 0) {
-                app.log.info({ changes }, "Ciclo automatico de expiracao aplicou alteracoes.");
+                logger.info({ changes }, "Ciclo automatico de expiracao aplicou alteracoes.");
             }
             if (typeof services.store?.flush === "function") {
                 await services.store.flush();
             }
         }
         catch (error) {
-            app.log.warn({ error }, "Falha no ciclo automatico de expiracao.");
+            logger.warn({ error: error?.message ?? String(error) }, "Falha no ciclo automatico de expiracao.");
         }
     };
     const shutdown = async (signal) => {
@@ -47,16 +49,16 @@ async function main() {
             clearInterval(expirationTimer);
             expirationTimer = null;
         }
-        app.log.info({ signal }, "Encerrando API e manager bot.");
+        logger.info({ signal }, "Encerrando API e manager bot.");
         await managerBotService.stop().catch((error) => {
-            app.log.warn({ error }, "Falha ao encerrar manager bot.");
+            logger.warn({ error: error?.message ?? String(error) }, "Falha ao encerrar manager bot.");
         });
         await app.close().catch((error) => {
-            app.log.warn({ error }, "Falha ao encerrar API.");
+            logger.warn({ error: error?.message ?? String(error) }, "Falha ao encerrar API.");
         });
         if (typeof services.store?.close === "function") {
             await services.store.close().catch((error) => {
-                app.log.warn({ error }, "Falha ao encerrar persistencia do manager.");
+                logger.warn({ error: error?.message ?? String(error) }, "Falha ao encerrar persistencia do manager.");
             });
         }
     };
@@ -68,19 +70,20 @@ async function main() {
     });
     try {
         await app.listen({ port, host });
-        await managerBotService.start(app.log);
+        logger.info({ host, port }, "API do manager ouvindo.");
+        await managerBotService.start(logger);
         if (expirationCheckIntervalMs > 0) {
             expirationTimer = setInterval(() => {
                 void runExpirationCycle();
             }, expirationCheckIntervalMs);
             expirationTimer.unref?.();
-            app.log.info({
+            logger.info({
                 intervalSeconds: Math.floor(expirationCheckIntervalMs / 1000),
             }, "Scheduler automatico de expiracao iniciado.");
         }
     }
     catch (error) {
-        app.log.error(error);
+        logger.error({ error: error?.message ?? String(error), stack: error?.stack ?? null }, "Falha ao iniciar a aplicacao.");
         await shutdown("startup_error");
         process.exit(1);
     }

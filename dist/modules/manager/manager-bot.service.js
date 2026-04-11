@@ -42,6 +42,7 @@ const CUSTOM_IDS = {
     cartAddonInfoPrefix: "mgr:cart:addon:info:",
     cartPaymentPrefix: "mgr:cart:payment:",
     pixCopyPrefix: "mgr:pix:copy:",
+    pixQrPrefix: "mgr:pix:qr:",
     pixCancelPrefix: "mgr:pix:cancel:",
     renewSelect: "mgr:renew:select",
     appsSetupSelect: "mgr:apps:setup",
@@ -843,7 +844,7 @@ class ManagerBotService {
                 await this.replyEphemeral(interaction, "Escolha um plano valido antes de gerar o pagamento.");
                 return;
             }
-            await interaction.deferUpdate();
+            await interaction.update(this.buildPaymentLoadingPayload(ownerUserId));
             try {
                 await this.persistCartState(interaction.channel, ownerUser, product, state);
                 const checkout = await this.dependencies.billingService.createEfipayPixCheckout({
@@ -859,24 +860,24 @@ class ManagerBotService {
                 this.clearCartRuntimeState(interaction.channel?.id);
                 await interaction.editReply({
                     ...this.buildPixCheckoutResponse({
-                        title: "Pix da assinatura criado",
-                        intro: "Escaneie o QR Code abaixo ou use o botao de Pix copia e cola. O pagamento sera validado automaticamente aqui no carrinho.",
                         checkout,
+                        user: ownerUser,
                         productName: product.name,
                         planName: selectedPlan.name,
-                        setupHint: state.addonCodes.includes("custom-bio")
-                            ? "Depois da aprovacao, va para <#1491695938622853251> e use `/apps` > configurar bot. A opcao de bio personalizada ficara liberada para voce informar o texto desejado."
-                            : "Depois da aprovacao, va para <#1491695938622853251> e use `/apps` > configurar bot para finalizar sua aplicacao.",
+                        durationDays: selectedPlan.durationDays ?? 0,
+                        addons: this.getCartSelectedAddons(product, state),
                     }),
                 });
             }
             catch (error) {
                 await interaction.editReply({
-                    content: [
-                        "Nao consegui gerar o Pix agora.",
+                    content: this.limitMessageSize([
+                        this.buildUserMention(ownerUserId),
+                        "❌ | Não consegui gerar o pagamento agora.",
                         error?.message ?? "Falha desconhecida.",
-                        "Se voce for da equipe, abra `Configurar Efi` no `/painel-manager` e valide a Efi do manager.",
-                    ].join("\n"),
+                        "Se você for da equipe, abra `Configurar Efi` no `/painel-manager` e valide a Efi do manager.",
+                    ].filter(Boolean).join("\n")),
+                    allowedMentions: this.buildSilentAllowedMentions(ownerUserId),
                     components: [],
                     embeds: [],
                 });
@@ -885,6 +886,10 @@ class ManagerBotService {
         }
         if (interaction.customId.startsWith(CUSTOM_IDS.pixCopyPrefix)) {
             await this.handlePixCopyButton(interaction);
+            return;
+        }
+        if (interaction.customId.startsWith(CUSTOM_IDS.pixQrPrefix)) {
+            await this.handlePixQrButton(interaction);
             return;
         }
         if (interaction.customId.startsWith(CUSTOM_IDS.pixCancelPrefix)) {
@@ -1447,12 +1452,11 @@ class ManagerBotService {
             try {
                 const checkout = await this.dependencies.billingService.createEfipayPixRenewal(bundles[0].subscription.id, quantity);
                 await interaction.editReply(this.buildPixCheckoutResponse({
-                    title: "Renovacao criada",
-                    intro: "Seu novo Pix de renovacao foi gerado com sucesso.",
                     checkout,
+                    user: interaction.user,
                     productName: bundles[0].product?.name ?? "Produto",
                     planName: bundles[0].plan?.name ?? "Plano",
-                    setupHint: "Depois do pagamento, seu tempo e reativado automaticamente.",
+                    durationDays: bundles[0].plan?.durationDays ?? 0,
                 }));
             }
             catch (error) {
@@ -1918,7 +1922,7 @@ class ManagerBotService {
         try {
             const template = String(interaction.fields.getTextInputValue("sales_cart_channel_template") ?? "").trim();
             this.dependencies.managerRuntimeConfigService.updateSalesSettings({
-                cartChannelNameTemplate: template || "carrinho-{user}",
+                cartChannelNameTemplate: template || "🛒・{guild}",
             });
             await this.persistStoreIfNeeded();
             const payload = this.buildSalesManagementPayload("Template do canal do carrinho atualizado.");
@@ -2012,8 +2016,19 @@ class ManagerBotService {
     }
     async createOrReuseCartChannel(guild, user, product) {
         const sales = this.dependencies.managerRuntimeConfigService.getResolvedSalesSettings();
+        const channelName = this.resolveCartChannelName(sales.cartChannelNameTemplate, guild, user, product);
         const existing = this.findCartChannelForUser(guild, user.id);
         if (existing) {
+            const updates = {};
+            if (existing.name !== channelName) {
+                updates.name = channelName;
+            }
+            if (sales.cartCategoryId && existing.parentId !== sales.cartCategoryId) {
+                updates.parent = sales.cartCategoryId;
+            }
+            if (Object.keys(updates).length > 0 && typeof existing.edit === "function") {
+                await existing.edit(updates).catch(() => null);
+            }
             return { channel: existing, created: false };
         }
         const botUserId = this.client?.user?.id;
@@ -2088,7 +2103,6 @@ class ManagerBotService {
             permissionOverwriteMap.set(String(overwrite.id), overwrite);
         }
         const permissionOverwrites = [...permissionOverwriteMap.values()];
-        const channelName = this.resolveCartChannelName(sales.cartChannelNameTemplate, user, product);
         const createdChannel = await guild.channels.create({
             name: channelName,
             type: discord_js_1.ChannelType.GuildText,
@@ -2102,20 +2116,33 @@ class ManagerBotService {
         return guild.channels.cache.find((channel) => channel?.type === discord_js_1.ChannelType.GuildText &&
             String(channel.topic ?? "").includes(`user:${userId}`)) ?? null;
     }
-    resolveCartChannelName(template, user, product) {
-        const rawTemplate = String(template ?? "carrinho-{user}").trim() || "carrinho-{user}";
+    resolveCartChannelName(template, guild, user, product) {
+        const configuredTemplate = String(template ?? "").trim();
+        const rawTemplate = !configuredTemplate || configuredTemplate === "carrinho-{user}"
+            ? "🛒・{guild}"
+            : configuredTemplate;
         const resolved = rawTemplate
             .replace(/\{user(name)?\}/giu, user.username)
+            .replace(/\{guild(name)?\}/giu, guild?.name ?? "servidor")
+            .replace(/\{server(name)?\}/giu, guild?.name ?? "servidor")
             .replace(/\{produto\}/giu, product.slug)
             .replace(/\{product\}/giu, product.slug);
         return resolved
-            .normalize("NFD")
-            .replace(/[\u0300-\u036f]/g, "")
+            .normalize("NFKC")
             .toLowerCase()
-            .replace(/[^a-z0-9-_]+/g, "-")
+            .replace(/[\r\n\t]+/gu, " ")
+            .replace(/\s+/gu, "-")
+            .replace(/[\\/:*?"<>|#@`']/gu, "")
             .replace(/-+/g, "-")
             .replace(/^-+|-+$/g, "")
-            .slice(0, 90) || `carrinho-${user.username}`.toLowerCase().replace(/[^a-z0-9-_]+/g, "-").slice(0, 90);
+            .slice(0, 90) || `🛒・${String(guild?.name ?? user.username ?? "cliente").trim() || "cliente"}`
+            .toLowerCase()
+            .replace(/[\r\n\t]+/gu, " ")
+            .replace(/\s+/gu, "-")
+            .replace(/[\\/:*?"<>|#@`']/gu, "")
+            .replace(/-+/g, "-")
+            .replace(/^-+|-+$/g, "")
+            .slice(0, 90);
     }
     async upsertCartPanelMessage(channel, user, product) {
         const existingMessages = await channel.messages.fetch({ limit: 20 }).catch(() => null);
@@ -2404,18 +2431,7 @@ class ManagerBotService {
                             ? "Carrinho privado criado pelo painel de vendas."
                             : "Carrinho privado reutilizado para continuar a compra.",
                     });
-                    await interaction.editReply({
-                        content: created
-                            ? `Seu carrinho foi aberto com sucesso em ${channel.toString()}. Continue a compra por la.`
-                            : `Seu carrinho ja estava aberto em ${channel.toString()}. Atualizei o painel para voce continuar por la.`,
-                        components: [
-                            new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
-                                .setLabel("Abrir Carrinho")
-                                .setEmoji("\uD83D\uDED2")
-                                .setStyle(discord_js_1.ButtonStyle.Link)
-                                .setURL(`https://discord.com/channels/${interaction.guild.id}/${channel.id}`)),
-                        ],
-                    });
+                    await interaction.editReply(this.buildCartOpenedPayload(interaction.guild, interaction.user, channel, created));
                     return;
                 }
                 catch (error) {
@@ -2460,12 +2476,11 @@ class ManagerBotService {
             await this.persistStoreIfNeeded();
             const plan = product.plans.find((item) => item.code === planCode) ?? null;
             await interaction.editReply(this.buildPixCheckoutResponse({
-                title: "Pix da assinatura criado",
-                intro: "Escaneie o QR Code abaixo ou use o botao de Pix copia e cola. O pagamento sera validado automaticamente.",
                 checkout,
+                user: interaction.user,
                 productName: product.name,
                 planName: plan?.name ?? planCode,
-                setupHint: "Depois da aprovacao, va para <#1491695938622853251> e use `/apps` > configurar bot para finalizar sua aplicacao.",
+                durationDays: plan?.durationDays ?? 0,
             }));
         }
         catch (error) {
@@ -2490,12 +2505,11 @@ class ManagerBotService {
             const checkout = await this.dependencies.billingService.createEfipayPixRenewal(subscriptionId, quantity);
             await this.persistStoreIfNeeded();
             await interaction.editReply(this.buildPixCheckoutResponse({
-                title: "Pix de renovacao criado",
-                intro: "Escaneie o QR Code abaixo ou use o botao de Pix copia e cola. O pagamento sera validado automaticamente.",
                 checkout,
+                user: interaction.user,
                 productName: bundle.product?.name ?? "Produto",
                 planName: bundle.plan?.name ?? "Plano",
-                setupHint: "Assim que o pagamento cair, a assinatura sera renovada automaticamente.",
+                durationDays: bundle.plan?.durationDays ?? 0,
             }));
         }
         catch (error) {
@@ -3179,6 +3193,8 @@ class ManagerBotService {
     buildCartPanelPayload(product, user, rawState) {
         const state = this.normalizeCartState(rawState, product);
         return {
+            content: this.buildUserMention(user),
+            allowedMentions: this.buildSilentAllowedMentions(user),
             embeds: [this.buildCartPanelEmbed(product, user, state)],
             components: this.buildCartPanelComponents(product, user.id, state),
         };
@@ -3219,8 +3235,6 @@ class ManagerBotService {
                 .setColor(this.resolveProductPanelColor(product, 0xf59e0b))
                 .setTitle("MANAGER | Adicionais")
                 .setDescription(this.limitMessageSize([
-                `<@${user.id}> (editado)`,
-                "",
                 "**Resumo da compra**",
                 `${product.name} (${selectedPlan?.durationDays ?? 0} dias) - **${compactCurrency(selectedPlan?.priceCents ?? 0, selectedPlan?.currency ?? "BRL")}**`,
                 "",
@@ -3229,6 +3243,7 @@ class ManagerBotService {
                 "**Valor a pagar**",
                 `**${compactCurrency(totalAmountCents)}**`,
             ].join("\n")));
+            this.applyUserEmbedIdentity(embed, user);
             if (isLikelyHttpUrl(product?.panelConfig?.imageUrl)) {
                 embed.setThumbnail(product.panelConfig.imageUrl);
             }
@@ -3257,6 +3272,7 @@ class ManagerBotService {
         if (isLikelyHttpUrl(product?.panelConfig?.imageUrl)) {
             embed.setThumbnail(product.panelConfig.imageUrl);
         }
+        this.applyUserEmbedIdentity(embed, user);
         return embed;
     }
     buildCartPanelComponents(product, ownerUserId, rawState) {
@@ -3479,7 +3495,7 @@ class ManagerBotService {
             name: "Carrinho",
             value: [
                 `Categoria: ${sales.cartCategoryId ? `<#${sales.cartCategoryId}>` : "nao definida"}`,
-                `Template do canal: ${sales.cartChannelNameTemplate ?? "carrinho-{user}"}`,
+                `Template do canal: ${sales.cartChannelNameTemplate ?? "🛒・{guild}"}`,
                 `Expiracao: ${Math.max(1, Number(sales.cartInactivityMinutes ?? 5))} minuto(s)`,
             ].join("\n"),
             inline: true,
@@ -4505,8 +4521,8 @@ class ManagerBotService {
             .setLabel("Template do canal do carrinho")
             .setStyle(discord_js_1.TextInputStyle.Short)
             .setRequired(true)
-            .setPlaceholder("Ex: carrinho-{user}")
-            .setValue(String(sales.cartChannelNameTemplate ?? "carrinho-{user}").slice(0, 100));
+            .setPlaceholder("Ex: 🛒・{guild}")
+            .setValue(String(sales.cartChannelNameTemplate ?? "🛒・{guild}").slice(0, 100));
         return new discord_js_1.ModalBuilder()
             .setCustomId(MODAL_IDS.salesTemplate)
             .setTitle("Nome do Canal do Carrinho")
@@ -4724,69 +4740,64 @@ class ManagerBotService {
     }
     buildPixCheckoutResponse(input) {
         const { checkout, payment } = input.checkout;
-        const addons = Array.isArray(checkout?.metadata?.addons)
-            ? checkout.metadata.addons.filter((addon) => addon && typeof addon === "object")
-            : [];
+        const checkoutOwnerId = String(input.user?.id ?? payment?.metadata?.customerDiscordUserId ?? this.getPaymentOwnerDiscordUserId(input.checkout) ?? "").trim() || null;
+        const addons = Array.isArray(input.addons)
+            ? input.addons.filter((addon) => addon && typeof addon === "object")
+            : (Array.isArray(checkout?.metadata?.addons)
+                ? checkout.metadata.addons.filter((addon) => addon && typeof addon === "object")
+                : []);
         const addonLines = addons.length > 0
-            ? addons.map((addon) => `- ${addon.name}${Number(addon.priceCents ?? 0) > 0 ? ` (${this.formatCurrency(addon.priceCents)})` : ""}`).join("\n").slice(0, 1024)
+            ? [
+                "```diff",
+                ...addons.map((addon) => `+ ${addon.name}${Number(addon.priceCents ?? 0) > 0 ? `  +${this.formatCurrency(addon.priceCents, addon.currency ?? "BRL").replace(/\s+/gu, "")}` : ""}`),
+                "```",
+            ].join("\n").slice(0, 1024)
             : null;
         const pixCode = String(checkout.pixCode ?? "").trim();
-        const rawQrImageValue = String(checkout.qrCodeImage ?? "").trim();
-        const qrImageAttachment = buildImageAttachmentFromDataUri(rawQrImageValue, `pix-${payment.id}`);
-        const qrImageUrl = qrImageAttachment
-            ? ""
-            : rawQrImageValue || this.buildPixQrCodeImageUrl(pixCode);
+        const hasQrCode = Boolean(String(checkout.qrCodeImage ?? "").trim() || pixCode);
+        const planDurationDays = Math.max(0, Number(input.durationDays ?? 0) || 0);
+        const productSummary = [
+            String(input.productName ?? "").trim(),
+            String(input.planName ?? "").trim(),
+        ].filter(Boolean).join(" ").trim() || "Produto";
+        const productLine = planDurationDays > 0
+            ? `${productSummary} - (${planDurationDays} Dias)`
+            : productSummary;
+        const expiresAt = checkout.expiresAt
+            ? `${this.formatDiscordFullTimestamp(checkout.expiresAt)}\n(${this.formatRelativeTimestamp(checkout.expiresAt)})`
+            : "Não informado";
         const embed = new discord_js_1.EmbedBuilder()
-            .setColor(0x16a34a)
-            .setTitle(input.title)
+            .setColor(0xf59e0b)
+            .setTitle("MANAGER | Sistema de pagamento")
             .setDescription(this.limitMessageSize([
-            input.intro,
-            "",
-            "Use o QR Code abaixo como principal opcao de pagamento.",
-            pixCode ? "Se preferir, use o botao `Pix Copia e Cola` para receber o codigo em mensagem privada." : "O codigo Pix copia e cola nao foi retornado pela Efi.",
-            "Voce tambem pode cancelar a compra antes de pagar usando o botao `Cancelar Compra`.",
-        ].filter(Boolean).join("\n")))
+            "```css",
+            "Pague com pix para receber o bot.",
+            "```",
+        ].join("\n")))
             .addFields({
-            name: "Produto",
-            value: `**${input.productName}**`,
-            inline: true,
-        }, {
-            name: "Plano",
-            value: `**${input.planName}**`,
-            inline: true,
-        }, {
-            name: "Valor",
-            value: `**${this.formatCurrency(checkout.totalAmountCents)}**`,
-            inline: true,
-        }, {
-            name: "Expira",
-            value: checkout.expiresAt ? this.formatRelativeTimestamp(checkout.expiresAt) : "Nao informado",
-            inline: true,
-        }, {
-            name: "Payment ID",
-            value: `\`${payment.id}\``,
-            inline: true,
-        }, {
-            name: "Validacao",
-            value: "O pagamento e validado automaticamente. Assim que aprovar, o manager atualiza este carrinho e libera seu acesso.",
+            name: "🌍 | Produto:",
+            value: productLine,
             inline: false,
         }, {
-            name: "Proximo passo",
-            value: this.limitMessageSize(input.setupHint ?? "Depois da aprovacao, acompanhe tudo em `/apps`.", 1024),
+            name: "💵 | Valor:",
+            value: this.formatCurrency(checkout.totalAmountCents).replace(/\s+/gu, ""),
+            inline: false,
+        }, {
+            name: "🕒 | Pagamento expira em:",
+            value: expiresAt,
+            inline: false,
+        }, {
+            name: "🤖 | Entrega:",
+            value: "Após efetuar o pagamento, o tempo de entrega é de no máximo 1 minuto!",
             inline: false,
         });
+        this.applyUserEmbedIdentity(embed, input.user ?? checkoutOwnerId);
         if (addonLines) {
             embed.addFields({
-                name: "Adicionais",
+                name: "✨ | Adicionais:",
                 value: addonLines,
                 inline: false,
             });
-        }
-        if (qrImageAttachment) {
-            embed.setImage(`attachment://${qrImageAttachment.name}`);
-        }
-        else if (isLikelyHttpUrl(qrImageUrl)) {
-            embed.setImage(qrImageUrl);
         }
         const components = [];
         const actionButtons = [];
@@ -4794,24 +4805,31 @@ class ManagerBotService {
             actionButtons.push(new discord_js_1.ButtonBuilder()
                 .setCustomId(`${CUSTOM_IDS.pixCopyPrefix}${payment.id}`)
                 .setLabel("Pix Copia e Cola")
-                .setEmoji("\uD83D\uDCCB")
-                .setStyle(discord_js_1.ButtonStyle.Secondary));
+                .setEmoji("\uD83D\uDC8E")
+                .setStyle(discord_js_1.ButtonStyle.Primary));
+        }
+        if (hasQrCode) {
+            actionButtons.push(new discord_js_1.ButtonBuilder()
+                .setCustomId(`${CUSTOM_IDS.pixQrPrefix}${payment.id}`)
+                .setLabel("Qr Code")
+                .setEmoji("\uD83D\uDCCE")
+                .setStyle(discord_js_1.ButtonStyle.Primary));
         }
         if (String(payment.status ?? "").toLowerCase() === "pending") {
             actionButtons.push(new discord_js_1.ButtonBuilder()
                 .setCustomId(`${CUSTOM_IDS.pixCancelPrefix}${payment.id}`)
-                .setLabel("Cancelar Compra")
-                .setEmoji("\uD83D\uDDD1\uFE0F")
+                .setEmoji("\u274C")
                 .setStyle(discord_js_1.ButtonStyle.Danger));
         }
         if (actionButtons.length > 0) {
             components.push(new discord_js_1.ActionRowBuilder().addComponents(...actionButtons));
         }
         return {
-            content: null,
+            content: this.buildUserMention(input.user ?? checkoutOwnerId),
+            allowedMentions: this.buildSilentAllowedMentions(input.user ?? checkoutOwnerId),
             embeds: [embed],
             components,
-            files: qrImageAttachment ? [qrImageAttachment] : [],
+            files: [],
         };
     }
     buildPixQrCodeImageUrl(pixCopyPaste) {
@@ -4905,7 +4923,6 @@ class ManagerBotService {
             ? addons.map((addon) => `- ${addon.name}${Number(addon.priceCents ?? 0) > 0 ? ` (${this.formatCurrency(addon.priceCents)})` : ""}`).join("\n").slice(0, 1024)
             : null;
         const defaultDescription = [
-            ownerUserId ? `<@${ownerUserId}>` : null,
             "Seu pagamento foi aprovado com sucesso.",
             `Va agora para ${configChannelMention} e use \`/apps\` para gerenciar a aplicacao comprada.`,
             "Todas as configuracoes do aplicativo comprado sao feitas por esse comando.",
@@ -4943,6 +4960,7 @@ class ManagerBotService {
                 inline: false,
             });
         }
+        this.applyUserEmbedIdentity(embed, ownerUserId);
         if (isLikelyHttpUrl(approvedImageUrl)) {
             embed.setImage(approvedImageUrl);
         }
@@ -4957,8 +4975,8 @@ class ManagerBotService {
             ]
             : [];
         return {
-            content: ownerUserId ? `<@${ownerUserId}>` : null,
-            allowedMentions: ownerUserId ? { parse: [], users: [ownerUserId] } : undefined,
+            content: this.buildUserMention(ownerUserId),
+            allowedMentions: this.buildSilentAllowedMentions(ownerUserId),
             embeds: [embed],
             components,
             attachments: [],
@@ -4969,35 +4987,59 @@ class ManagerBotService {
         const productName = bundle?.subscription?.product?.name || String(bundle?.payment?.metadata?.productSlug ?? "").trim() || "Produto";
         const planName = bundle?.subscription?.plan?.name || String(bundle?.payment?.metadata?.planCode ?? "").trim() || "Plano";
         const ownerUserId = this.getPaymentOwnerDiscordUserId(bundle);
+        const embed = new discord_js_1.EmbedBuilder()
+            .setColor(0xef4444)
+            .setTitle("Compra cancelada")
+            .setDescription(this.limitMessageSize([
+            "Esse Pix foi cancelado antes da aprovação.",
+            "Se quiser comprar novamente, abra o painel do produto e gere um novo checkout.",
+        ].join("\n")))
+            .addFields({
+            name: "Produto",
+            value: `**${productName}**`,
+            inline: true,
+        }, {
+            name: "Plano",
+            value: `**${planName}**`,
+            inline: true,
+        }, {
+            name: "Valor",
+            value: `**${this.formatCurrency(bundle?.payment?.amountCents ?? 0)}**`,
+            inline: true,
+        });
+        this.applyUserEmbedIdentity(embed, ownerUserId);
         return {
-            content: ownerUserId ? `<@${ownerUserId}>` : null,
-            allowedMentions: ownerUserId ? { parse: [], users: [ownerUserId] } : undefined,
-            embeds: [
-                new discord_js_1.EmbedBuilder()
-                    .setColor(0xef4444)
-                    .setTitle("Compra cancelada")
-                    .setDescription(this.limitMessageSize([
-                    ownerUserId ? `<@${ownerUserId}>` : null,
-                    "Esse Pix foi cancelado antes da aprovacao.",
-                    "Se quiser comprar novamente, abra o painel do produto e gere um novo checkout.",
-                ].filter(Boolean).join("\n")))
-                    .addFields({
-                    name: "Produto",
-                    value: `**${productName}**`,
-                    inline: true,
-                }, {
-                    name: "Plano",
-                    value: `**${planName}**`,
-                    inline: true,
-                }, {
-                    name: "Valor",
-                    value: `**${this.formatCurrency(bundle?.payment?.amountCents ?? 0)}**`,
-                    inline: true,
-                }),
-            ],
+            content: this.buildUserMention(ownerUserId),
+            allowedMentions: this.buildSilentAllowedMentions(ownerUserId),
+            embeds: [embed],
             components: [],
             attachments: [],
             files: [],
+        };
+    }
+    buildPixQrMessagePayload(bundle) {
+        const ownerUserId = this.getPaymentOwnerDiscordUserId(bundle);
+        const pixCode = String(bundle?.checkout?.pixCode ?? "").trim();
+        const rawQrImageValue = String(bundle?.checkout?.qrCodeImage ?? "").trim();
+        const qrImageAttachment = buildImageAttachmentFromDataUri(rawQrImageValue, `pix-${bundle?.payment?.id ?? "checkout"}`);
+        const qrImageUrl = qrImageAttachment
+            ? ""
+            : rawQrImageValue || this.buildPixQrCodeImageUrl(pixCode);
+        const embed = new discord_js_1.EmbedBuilder()
+            .setColor(0x22c55e)
+            .setTitle("QR CODE GERADO COM SUCESSO:");
+        this.applyUserEmbedIdentity(embed, ownerUserId);
+        if (qrImageAttachment) {
+            embed.setImage(`attachment://${qrImageAttachment.name}`);
+        }
+        else if (isLikelyHttpUrl(qrImageUrl)) {
+            embed.setImage(qrImageUrl);
+        }
+        return {
+            content: this.buildUserMention(ownerUserId),
+            allowedMentions: this.buildSilentAllowedMentions(ownerUserId),
+            embeds: [embed],
+            files: qrImageAttachment ? [qrImageAttachment] : [],
         };
     }
     async handlePixCopyButton(interaction) {
@@ -5020,7 +5062,42 @@ class ManagerBotService {
             await this.replyEphemeral(interaction, "A Efi nao retornou o codigo Pix copia e cola para esse checkout.");
             return;
         }
-        await this.replyEphemeral(interaction, pixCode);
+        await this.replyEphemeral(interaction, this.limitMessageSize([
+            "Pix Copia e Cola:",
+            "```txt",
+            pixCode,
+            "```",
+        ].join("\n")));
+    }
+    async handlePixQrButton(interaction) {
+        const paymentId = String(interaction.customId.slice(CUSTOM_IDS.pixQrPrefix.length) ?? "").trim();
+        const bundle = this.dependencies.billingService.getPaymentById(paymentId);
+        if (!bundle?.payment || !bundle?.checkout) {
+            await this.replyEphemeral(interaction, "Esse checkout Pix nao esta mais disponivel.");
+            return;
+        }
+        if (!this.canManagePaymentBundle(interaction.user.id, bundle)) {
+            await this.replyEphemeral(interaction, "Apenas o dono da compra pode abrir esse QR Code.");
+            return;
+        }
+        if (String(bundle.payment.status ?? "").toLowerCase() !== "pending") {
+            await this.replyEphemeral(interaction, "Esse Pix nao esta mais pendente. Gere um novo pagamento se necessario.");
+            return;
+        }
+        const hasQrCode = Boolean(String(bundle.checkout.qrCodeImage ?? "").trim() || String(bundle.checkout.pixCode ?? "").trim());
+        if (!hasQrCode) {
+            await this.replyEphemeral(interaction, "A Efi nao retornou um QR Code para esse checkout.");
+            return;
+        }
+        await interaction.deferUpdate().catch(() => null);
+        const channel = interaction.channel;
+        if (!channel || typeof channel.send !== "function") {
+            await this.safeReply(interaction, "Nao consegui enviar o QR Code nesse canal.");
+            return;
+        }
+        await channel.send(this.buildPixQrMessagePayload(bundle)).catch(async () => {
+            await this.safeReply(interaction, "Nao consegui enviar o QR Code agora.");
+        });
     }
     async handlePixCancelButton(interaction) {
         const paymentId = String(interaction.customId.slice(CUSTOM_IDS.pixCancelPrefix.length) ?? "").trim();
@@ -5437,10 +5514,12 @@ class ManagerBotService {
             channel.topic = nextTopic;
         }
         catch (error) {
-            this.logger.warn({
-                channelId: String(channel?.id ?? "").trim() || null,
-                error: error?.message ?? String(error),
-            }, "Falha ao marcar o carrinho como aprovado no topic.");
+            if (!this.shouldIgnoreCartChannelLogError(error)) {
+                this.logger.warn({
+                    channelId: String(channel?.id ?? "").trim() || null,
+                    error: error?.message ?? String(error),
+                }, "Falha ao marcar o carrinho como aprovado no topic.");
+            }
         }
     }
     scheduleCartApprovedClosure(channel, approvedAt = Date.now()) {
@@ -5599,7 +5678,10 @@ class ManagerBotService {
         }
         catch (error) {
             const message = String(error?.message ?? error ?? "").toLowerCase();
-            if (!message.includes("rate limit") && !message.includes("too many requests") && !message.includes("429")) {
+            if (!message.includes("rate limit") &&
+                !message.includes("too many requests") &&
+                !message.includes("429") &&
+                !this.shouldIgnoreCartChannelLogError(error)) {
                 this.logger.warn({
                     channelId: String(channel?.id ?? "").trim() || null,
                     error: error?.message ?? String(error),
@@ -5966,6 +6048,109 @@ class ManagerBotService {
             return this.formatIsoDate(isoDate);
         }
         return `<t:${timestamp}:R>`;
+    }
+    formatDiscordFullTimestamp(isoDate) {
+        if (!isoDate) {
+            return "Não informado";
+        }
+        const timestamp = Math.floor(Date.parse(isoDate) / 1000);
+        if (!Number.isFinite(timestamp)) {
+            return this.formatIsoDate(isoDate);
+        }
+        return `<t:${timestamp}:F>`;
+    }
+    resolveDiscordUser(target) {
+        if (target && typeof target === "object" && (target.id || target.username || typeof target.displayAvatarURL === "function")) {
+            return target;
+        }
+        const userId = String(target ?? "").trim();
+        if (!userId) {
+            return null;
+        }
+        return this.client?.users?.cache?.get(userId) ?? null;
+    }
+    buildUserMention(target) {
+        const userId = String(typeof target === "object" ? target?.id ?? "" : target ?? "").trim();
+        return userId ? `<@${userId}>` : null;
+    }
+    buildSilentAllowedMentions(target) {
+        const userId = String(typeof target === "object" ? target?.id ?? "" : target ?? "").trim();
+        return userId ? { parse: [] } : undefined;
+    }
+    getUserDisplayLabel(target) {
+        const user = this.resolveDiscordUser(target) ?? (target && typeof target === "object" ? target : null);
+        const fallbackName = typeof target === "string" && !/^\d{15,}$/u.test(target) ? target : "cliente";
+        const rawName = String(user?.globalName ?? user?.displayName ?? user?.username ?? user?.tag ?? fallbackName).trim();
+        const sanitized = rawName.replace(/^@+/u, "").trim() || "cliente";
+        return `@${sanitized}`;
+    }
+    getUserAvatarUrl(target) {
+        const user = this.resolveDiscordUser(target) ?? (target && typeof target === "object" ? target : null);
+        if (user && typeof user.displayAvatarURL === "function") {
+            return user.displayAvatarURL({ size: 256, extension: "png" });
+        }
+        if (user && typeof user.avatarURL === "function") {
+            return user.avatarURL({ size: 256, extension: "png" });
+        }
+        return null;
+    }
+    applyUserEmbedIdentity(embed, target) {
+        if (!embed) {
+            return embed;
+        }
+        const name = this.getUserDisplayLabel(target);
+        const iconURL = this.getUserAvatarUrl(target);
+        if (iconURL) {
+            embed.setAuthor({ name, iconURL });
+            return embed;
+        }
+        embed.setAuthor({ name });
+        return embed;
+    }
+    buildPaymentLoadingPayload(target) {
+        return {
+            content: this.limitMessageSize([
+                this.buildUserMention(target),
+                "🔄 | Gerando o pagamento...",
+            ].filter(Boolean).join("\n")),
+            allowedMentions: this.buildSilentAllowedMentions(target),
+            embeds: [],
+            components: [],
+            attachments: [],
+            files: [],
+        };
+    }
+    buildCartOpenedPayload(guild, user, channel, created) {
+        const embed = new discord_js_1.EmbedBuilder()
+            .setColor(0x22c55e)
+            .setTitle("MANAGER | Sistema de Vendas")
+            .setDescription(this.limitMessageSize([
+            created
+                ? `✅ | ${this.buildUserMention(user)} Seu carrinho foi aberto com sucesso em: ${channel.toString()}`
+                : `♻️ | ${this.buildUserMention(user)} Seu carrinho já estava aberto em: ${channel.toString()}`,
+        ].join("\n")));
+        this.applyUserEmbedIdentity(embed, user);
+        return {
+            content: this.buildUserMention(user),
+            allowedMentions: this.buildSilentAllowedMentions(user),
+            embeds: [embed],
+            components: [
+                new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
+                    .setLabel("Ir para o Carrinho")
+                    .setEmoji("\uD83D\uDED2")
+                    .setStyle(discord_js_1.ButtonStyle.Link)
+                    .setURL(`https://discord.com/channels/${guild.id}/${channel.id}`)),
+            ],
+        };
+    }
+    shouldIgnoreCartChannelLogError(error) {
+        const message = String(error?.message ?? error ?? "").toLowerCase();
+        return message.includes("unknown channel") ||
+            message.includes("missing access") ||
+            message.includes("unknown message") ||
+            message.includes("cannot send messages") ||
+            message.includes("missing permissions") ||
+            message.includes("10003");
     }
     getNestedValue(source, path) {
         const segments = String(path ?? "")

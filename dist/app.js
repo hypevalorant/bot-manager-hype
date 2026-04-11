@@ -7,6 +7,7 @@ exports.createServices = createServices;
 exports.buildApp = buildApp;
 const cors_1 = __importDefault(require("@fastify/cors"));
 const fastify_1 = __importDefault(require("fastify"));
+const logger_js_1 = require("./core/logger.js");
 const manager_runtime_config_js_1 = require("./core/manager-runtime-config.js");
 const persistent_store_js_1 = require("./core/persistent-store.js");
 const app_pool_service_js_1 = require("./modules/apps/app-pool.service.js");
@@ -63,10 +64,10 @@ async function createServices() {
         subscriptionService,
     };
 }
-async function buildApp(services) {
+async function buildApp(services, logger = (0, logger_js_1.createAppLogger)("Manager API")) {
     const resolvedServices = services ?? (await createServices());
     const app = (0, fastify_1.default)({
-        logger: true,
+        logger: false,
     });
     await app.register(cors_1.default, {
         origin: true,
@@ -79,7 +80,7 @@ async function buildApp(services) {
             await resolvedServices.store.flush();
         }
         catch (error) {
-            app.log.warn({ error }, "Falha ao persistir o estado do manager.");
+            logger.warn({ error: error?.message ?? String(error) }, "Falha ao persistir o estado do manager.");
         }
     });
     await (0, register_routes_js_1.registerRoutes)(app, resolvedServices);
