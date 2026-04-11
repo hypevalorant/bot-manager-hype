@@ -21,6 +21,7 @@ async function main() {
         store: services.store,
         subscriptionService: services.subscriptionService,
     }, (0, manager_bot_config_js_1.getManagerBotConfigFromEnv)());
+    services.managerBotService = managerBotService;
     const port = Number(process.env.PORT ?? 80);
     const host = process.env.HOST ?? "0.0.0.0";
     const expirationCheckIntervalMs = Math.max(0, Number(process.env.EXPIRATION_CHECK_INTERVAL_SECONDS ?? 300) * 1000);

@@ -44,6 +44,29 @@ function enforceAdmin(request) {
 function enforcePaymentOrAdmin(request, payment) {
     return (0, security_js_1.requirePaymentOrAdminAccess)(request, payment);
 }
+async function syncApprovedPaymentsToManager(result, services) {
+    const managerBotService = services?.managerBotService;
+    if (!managerBotService || typeof managerBotService.syncApprovedPaymentToCart !== "function") {
+        return;
+    }
+    const processed = Array.isArray(result?.processed) ? result.processed : [];
+    for (const item of processed) {
+        if (String(item?.status ?? "").toLowerCase() !== "approved") {
+            continue;
+        }
+        await managerBotService.syncApprovedPaymentToCart(item.paymentId).catch(() => null);
+    }
+}
+async function syncApprovedPaymentResultToManager(paymentId, result, services) {
+    const managerBotService = services?.managerBotService;
+    if (!managerBotService || typeof managerBotService.syncApprovedPaymentToCart !== "function") {
+        return;
+    }
+    if (String(result?.payment?.status ?? "").toLowerCase() !== "approved") {
+        return;
+    }
+    await managerBotService.syncApprovedPaymentToCart(paymentId).catch(() => null);
+}
 function getProductSaleStatus(product, services) {
     const artifactResolution = services.sourceArtifactService.resolveArtifact(product.sourceSlug);
     const poolApps = services.appPoolService
@@ -365,7 +388,9 @@ async function registerRoutes(app, services) {
             return reply.status(401).send({ error: "Webhook Efipay rejeitada." });
         }
         try {
-            return reply.status(202).send(await services.billingService.handleEfipayWebhook(request.body));
+            const result = await services.billingService.handleEfipayWebhook(request.body);
+            await syncApprovedPaymentsToManager(result, services);
+            return reply.status(202).send(result);
         }
         catch (error) {
             return reply.status(400).send({ error: error.message });
@@ -377,7 +402,9 @@ async function registerRoutes(app, services) {
             return reply.status(401).send({ error: "Webhook Efipay rejeitada." });
         }
         try {
-            return reply.status(202).send(await services.billingService.handleEfipayWebhook(request.body));
+            const result = await services.billingService.handleEfipayWebhook(request.body);
+            await syncApprovedPaymentsToManager(result, services);
+            return reply.status(202).send(result);
         }
         catch (error) {
             return reply.status(400).send({ error: error.message });
@@ -464,6 +491,7 @@ async function registerRoutes(app, services) {
         try {
             enforceAdmin(request);
             const result = await services.billingService.reconcileEfipayPayment(paymentId);
+            await syncApprovedPaymentResultToManager(paymentId, result, services);
             return reply.send({
                 ...result,
                 payment: (0, serializers_js_1.sanitizePaymentRecord)(result.payment),

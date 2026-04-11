@@ -279,6 +279,9 @@ class ManagerBotService {
                 await this.rehydrateExistingCartTimers().catch((error) => {
                     this.logger.warn({ error: error?.message ?? String(error) }, "Falha ao reidratar timers de carrinho na inicializacao.");
                 });
+                await this.recoverApprovedCartNotifications().catch((error) => {
+                    this.logger.warn({ error: error?.message ?? String(error) }, "Falha ao recuperar carrinhos com pagamento aprovado.");
+                });
                 this.startCustomerRoleSyncTimer();
             }
             catch (error) {
@@ -2115,6 +2118,106 @@ class ManagerBotService {
     findCartChannelForUser(guild, userId) {
         return guild.channels.cache.find((channel) => channel?.type === discord_js_1.ChannelType.GuildText &&
             String(channel.topic ?? "").includes(`user:${userId}`)) ?? null;
+    }
+    findCartChannelForUserAndProduct(channels, userId, productSlug) {
+        const normalizedUserId = String(userId ?? "").trim();
+        const normalizedProductSlug = String(productSlug ?? "").trim();
+        if (!normalizedUserId || !normalizedProductSlug) {
+            return null;
+        }
+        for (const channel of channels?.values?.() ?? channels ?? []) {
+            if (!channel || channel.type !== discord_js_1.ChannelType.GuildText) {
+                continue;
+            }
+            const topic = String(channel.topic ?? "");
+            if (topic.includes(`user:${normalizedUserId}`) && topic.includes(`product:${normalizedProductSlug}`)) {
+                return channel;
+            }
+        }
+        return null;
+    }
+    async findCartChannelForApprovedPayment(userId, productSlug) {
+        const normalizedUserId = String(userId ?? "").trim();
+        const normalizedProductSlug = String(productSlug ?? "").trim();
+        if (!this.client || !normalizedUserId || !normalizedProductSlug) {
+            return null;
+        }
+        for (const guild of this.client.guilds.cache.values()) {
+            const cachedMatch = this.findCartChannelForUserAndProduct(guild.channels?.cache, normalizedUserId, normalizedProductSlug);
+            if (cachedMatch) {
+                return cachedMatch;
+            }
+            const fetchedChannels = await guild.channels.fetch().catch(() => null);
+            const fetchedMatch = this.findCartChannelForUserAndProduct(fetchedChannels, normalizedUserId, normalizedProductSlug);
+            if (fetchedMatch) {
+                return fetchedMatch;
+            }
+        }
+        return null;
+    }
+    async resolveCartTrackingForBundle(bundle) {
+        if (!this.client || !bundle?.payment) {
+            return { channel: null, channelId: null, message: null, messageId: null };
+        }
+        const ownerUserId = this.getPaymentOwnerDiscordUserId(bundle);
+        const productSlug = String(bundle?.payment?.metadata?.productSlug ?? bundle?.checkout?.productSlug ?? bundle?.subscription?.product?.slug ?? "").trim();
+        let channelId = String(bundle?.payment?.metadata?.cartChannelId ?? bundle?.checkout?.metadata?.cartChannelId ?? "").trim() || null;
+        let messageId = String(bundle?.payment?.metadata?.cartMessageId ?? bundle?.checkout?.metadata?.cartMessageId ?? "").trim() || null;
+        let channel = channelId
+            ? this.client.channels.cache.get(channelId) ?? (await this.client.channels.fetch(channelId).catch(() => null))
+            : null;
+        if (!channel?.isTextBased?.()) {
+            channel = await this.findCartChannelForApprovedPayment(ownerUserId, productSlug);
+            channelId = String(channel?.id ?? "").trim() || null;
+        }
+        let message = null;
+        if (messageId && channel?.messages?.fetch) {
+            message = await channel.messages.fetch(messageId).catch(() => null);
+        }
+        if (!message && channel?.messages?.fetch) {
+            const recentMessages = await channel.messages.fetch({ limit: 20 }).catch(() => null);
+            message = this.findCartMessage(recentMessages, ownerUserId, productSlug);
+            messageId = String(message?.id ?? "").trim() || null;
+        }
+        return { channel, channelId, message, messageId };
+    }
+    async persistRecoveredCartTracking(bundle, tracking) {
+        const channelId = String(tracking?.channelId ?? "").trim() || null;
+        const messageId = String(tracking?.messageId ?? "").trim() || null;
+        if (!bundle?.payment || (!channelId && !messageId)) {
+            return false;
+        }
+        let changed = false;
+        if (!bundle.payment.metadata || typeof bundle.payment.metadata !== "object") {
+            bundle.payment.metadata = {};
+            changed = true;
+        }
+        if (bundle.checkout && (!bundle.checkout.metadata || typeof bundle.checkout.metadata !== "object")) {
+            bundle.checkout.metadata = {};
+            changed = true;
+        }
+        if (channelId && bundle.payment.metadata.cartChannelId !== channelId) {
+            bundle.payment.metadata.cartChannelId = channelId;
+            changed = true;
+        }
+        if (messageId && bundle.payment.metadata.cartMessageId !== messageId) {
+            bundle.payment.metadata.cartMessageId = messageId;
+            changed = true;
+        }
+        if (bundle.checkout) {
+            if (channelId && bundle.checkout.metadata.cartChannelId !== channelId) {
+                bundle.checkout.metadata.cartChannelId = channelId;
+                changed = true;
+            }
+            if (messageId && bundle.checkout.metadata.cartMessageId !== messageId) {
+                bundle.checkout.metadata.cartMessageId = messageId;
+                changed = true;
+            }
+        }
+        if (changed) {
+            await this.persistStoreIfNeeded();
+        }
+        return changed;
     }
     resolveCartChannelName(template, guild, user, product) {
         const configuredTemplate = String(template ?? "").trim();
@@ -5152,22 +5255,24 @@ class ManagerBotService {
         if (!this.client || !bundle?.payment) {
             return false;
         }
-        const channelId = String(bundle.payment.metadata?.cartChannelId ?? bundle.checkout?.metadata?.cartChannelId ?? "").trim();
-        const messageId = String(bundle.payment.metadata?.cartMessageId ?? bundle.checkout?.metadata?.cartMessageId ?? "").trim();
         const approvedAt = Math.max(1, Date.parse(String(bundle.payment.paidAt ?? "")) || Date.now());
+        const tracking = await this.resolveCartTrackingForBundle(bundle);
+        const channelId = String(tracking.channelId ?? "").trim() || null;
+        const messageId = String(tracking.messageId ?? "").trim() || null;
         if (channelId) {
             this.clearCartRuntimeState(channelId);
         }
         if (!channelId) {
             return false;
         }
-        const channel = this.client.channels.cache.get(channelId) ?? (await this.client.channels.fetch(channelId).catch(() => null));
+        const channel = tracking.channel ?? this.client.channels.cache.get(channelId) ?? (await this.client.channels.fetch(channelId).catch(() => null));
         if (!channel?.isTextBased?.()) {
             return false;
         }
+        await this.persistRecoveredCartTracking(bundle, tracking).catch(() => null);
         const payload = this.buildApprovedPixCheckoutPayload(bundle, channel.guildId ?? null);
         if (messageId && channel.messages?.fetch) {
-            const message = await channel.messages.fetch(messageId).catch(() => null);
+            const message = tracking.message ?? await channel.messages.fetch(messageId).catch(() => null);
             if (message?.editable) {
                 await message.edit(payload).catch(() => null);
                 await this.markCartChannelApproved(channel, approvedAt);
@@ -5179,6 +5284,30 @@ class ManagerBotService {
         await this.markCartChannelApproved(channel, approvedAt);
         this.scheduleCartApprovedClosure(channel, approvedAt);
         return true;
+    }
+    async syncApprovedPaymentToCart(paymentId) {
+        const bundle = this.dependencies.billingService.getPaymentById(paymentId);
+        if (!bundle?.payment || String(bundle.payment.status ?? "").toLowerCase() !== "approved") {
+            return false;
+        }
+        return this.handlePaymentApprovedNotification(bundle);
+    }
+    async recoverApprovedCartNotifications() {
+        const recentApprovedPayments = this.dependencies.store.payments
+            .filter((payment) => String(payment?.status ?? "").toLowerCase() === "approved")
+            .sort((left, right) => Date.parse(right.paidAt ?? right.createdAt ?? 0) - Date.parse(left.paidAt ?? left.createdAt ?? 0))
+            .slice(0, 30);
+        let recovered = 0;
+        for (const payment of recentApprovedPayments) {
+            const synced = await this.syncApprovedPaymentToCart(payment.id).catch(() => false);
+            if (synced) {
+                recovered += 1;
+            }
+        }
+        if (recovered > 0) {
+            this.logger.info({ recovered }, "Carrinhos aprovados recuperados na inicializacao.");
+        }
+        return recovered;
     }
     extractApplicationOwnerUserIds(application) {
         const ownerIds = new Set();

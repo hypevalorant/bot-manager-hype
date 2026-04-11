@@ -113,6 +113,8 @@ class BillingService {
         const { customer, plan, product, subscription } = this.subscriptionService.createPendingSubscription(input);
         const addons = this.getSelectedAddons(product.id, input.addonCodes);
         const totalAmountCents = this.calculateTotalAmountCents(plan.priceCents, addons);
+        const cartChannelId = String(input?.cartChannelId ?? "").trim() || null;
+        const cartMessageId = String(input?.cartMessageId ?? "").trim() || null;
         const charge = await this.efipayClient.createPixCharge({
             amountCents: totalAmountCents,
             description: `${product.name} ${plan.code} ${subscription.id.slice(0, 8)}`,
@@ -135,6 +137,11 @@ class BillingService {
                 charge,
                 qrCode,
                 ...this.buildPurchaseMetadata(addons),
+                customerDiscordUserId: customer.discordUserId,
+                productSlug: product.slug,
+                planCode: plan.code,
+                cartChannelId,
+                cartMessageId,
             },
         });
         const payment = this.createPayment({
@@ -151,6 +158,8 @@ class BillingService {
                 planCode: plan.code,
                 customerDiscordUserId: customer.discordUserId,
                 locId: charge.loc?.id ?? null,
+                cartChannelId,
+                cartMessageId,
             },
         });
         return {
