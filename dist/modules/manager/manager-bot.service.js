@@ -1443,10 +1443,17 @@ class ManagerBotService {
         if (interaction.guild) {
             await this.tryGrantCustomerRole(interaction.guild, interaction.user.id).catch(() => null);
         }
-        await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
+        await interaction.deferReply();
         const payload = await this.buildAppsPanelPayload(interaction.user.id);
-        await interaction.editReply(payload);
-        this.rememberAppsPanelInteraction(interaction, { page: 0, selectedKey: null, view: "overview" });
+        const replyMessage = await interaction.editReply(payload);
+        this.rememberAppsPanelInteraction(interaction, {
+            page: 0,
+            selectedKey: null,
+            view: "overview",
+            panelOwnerUserId: interaction.user.id,
+            messageId: replyMessage?.id ?? null,
+            channelId: replyMessage?.channelId ?? interaction.channelId ?? null,
+        });
     }
     async handleRenewCommand(interaction) {
         const quantity = interaction.options.getInteger("quantidade") ?? 1;
@@ -2795,45 +2802,110 @@ class ManagerBotService {
         const [pageRaw, viewRaw] = payload.split(":");
         const selectedKey = String(interaction.values?.[0] ?? "").trim();
         const page = Math.max(0, Number(pageRaw ?? 0) || 0);
-        this.rememberAppsPanelInteraction(interaction, { page, selectedKey, view: viewRaw === "settings" ? "settings" : "overview" });
-        await interaction.deferUpdate();
-        await interaction.editReply(await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, viewRaw === "settings" ? "settings" : "overview")).catch(() => null);
+        const requestedView = viewRaw === "settings" ? "settings" : "overview";
+        const context = this.resolveAppsPanelContext(interaction, page, selectedKey);
+        if (!context.entry) {
+            await this.replyEphemeral(interaction, "NÃ£o encontrei a aplicaÃ§Ã£o selecionada.");
+            return;
+        }
+        if (!this.canAccessAppEntry(interaction.user.id, context.entry)) {
+            await this.replyEphemeral(interaction, this.buildAppsAccessDeniedMessage());
+            return;
+        }
+        const nextPanel = await this.buildAppsPanelViewPayload(context.panelOwnerUserId, context.state.page, context.entry.key, requestedView, context.entry);
+        this.rememberAppsPanelInteraction(interaction, { page: context.state.page, selectedKey: context.entry.key, view: nextPanel.view, panelOwnerUserId: context.panelOwnerUserId, messageId: interaction.message?.id ?? null, channelId: interaction.channelId ?? null });
+        await interaction.update(nextPanel.payload).catch(() => null);
     }
     async handleAppsPageButton(interaction) {
         const payload = String(interaction.customId.slice(CUSTOM_IDS.appsPagePrefix.length) ?? "").trim();
         const [pageRaw, selectedKeyRaw, viewRaw] = payload.split(":");
         const page = Math.max(0, Number(pageRaw ?? 0) || 0);
         const selectedKey = String(selectedKeyRaw ?? "").trim();
-        this.rememberAppsPanelInteraction(interaction, { page, selectedKey, view: viewRaw === "settings" ? "settings" : "overview" });
-        await interaction.deferUpdate();
-        await interaction.editReply(await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, viewRaw === "settings" ? "settings" : "overview")).catch(() => null);
+        const requestedView = viewRaw === "settings" ? "settings" : "overview";
+        const context = this.resolveAppsPanelContext(interaction, page, selectedKey);
+        if (!context.entry) {
+            await this.replyEphemeral(interaction, "NÃ£o encontrei a aplicaÃ§Ã£o selecionada.");
+            return;
+        }
+        if (!this.canAccessAppEntry(interaction.user.id, context.entry)) {
+            await this.replyEphemeral(interaction, this.buildAppsAccessDeniedMessage());
+            return;
+        }
+        const nextPanel = await this.buildAppsPanelViewPayload(context.panelOwnerUserId, context.state.page, context.entry.key, requestedView, context.entry);
+        this.rememberAppsPanelInteraction(interaction, { page: context.state.page, selectedKey: context.entry.key, view: nextPanel.view, panelOwnerUserId: context.panelOwnerUserId, messageId: interaction.message?.id ?? null, channelId: interaction.channelId ?? null });
+        await interaction.update(nextPanel.payload).catch(() => null);
     }
     async handleAppsViewButton(interaction) {
         const payload = String(interaction.customId.slice(CUSTOM_IDS.appsViewPrefix.length) ?? "").trim();
         const [viewRaw, pageRaw, selectedKeyRaw] = payload.split(":");
         const page = Math.max(0, Number(pageRaw ?? 0) || 0);
         const selectedKey = String(selectedKeyRaw ?? "").trim();
-        this.rememberAppsPanelInteraction(interaction, { page, selectedKey, view: viewRaw === "settings" ? "settings" : "overview" });
-        await interaction.deferUpdate();
-        await interaction.editReply(await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, viewRaw === "settings" ? "settings" : "overview")).catch(() => null);
+        const requestedView = viewRaw === "settings" ? "settings" : "overview";
+        const context = this.resolveAppsPanelContext(interaction, page, selectedKey);
+        if (!context.entry) {
+            await this.replyEphemeral(interaction, "NÃ£o encontrei a aplicaÃ§Ã£o selecionada.");
+            return;
+        }
+        if (!this.canAccessAppEntry(interaction.user.id, context.entry)) {
+            await this.replyEphemeral(interaction, this.buildAppsAccessDeniedMessage());
+            return;
+        }
+        const nextPanel = await this.buildAppsPanelViewPayload(context.panelOwnerUserId, context.state.page, context.entry.key, requestedView, context.entry);
+        this.rememberAppsPanelInteraction(interaction, { page: context.state.page, selectedKey: context.entry.key, view: nextPanel.view, panelOwnerUserId: context.panelOwnerUserId, messageId: interaction.message?.id ?? null, channelId: interaction.channelId ?? null });
+        await interaction.update(nextPanel.payload).catch(() => null);
     }
     async handleAppsPowerButton(interaction) {
         const payload = String(interaction.customId.slice(CUSTOM_IDS.appsPowerPrefix.length) ?? "").trim();
         const [action, pageRaw, selectedKeyRaw] = payload.split(":");
         const page = Math.max(0, Number(pageRaw ?? 0) || 0);
         const selectedKey = String(selectedKeyRaw ?? "").trim();
-        const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
+        const context = this.resolveAppsPanelContext(interaction, page, selectedKey);
+        const entry = context.entry;
         if (!entry?.instance) {
             await this.replyEphemeral(interaction, "Não encontrei a aplicação selecionada para executar essa ação.");
             return;
         }
-        if (!this.canUpdateInstance(interaction.user.id, entry.instance)) {
-            await this.replyEphemeral(interaction, "Você não pode controlar essa aplicação.");
+        if (!this.canAccessAppEntry(interaction.user.id, entry)) {
+            await this.replyEphemeral(interaction, this.buildAppsAccessDeniedMessage());
             return;
         }
-        this.rememberAppsPanelInteraction(interaction, { page, selectedKey, view: "overview" });
+        this.rememberAppsPanelInteraction(interaction, { page: context.state.page, selectedKey: entry.key, view: "overview", panelOwnerUserId: context.panelOwnerUserId, messageId: interaction.message?.id ?? null, channelId: interaction.channelId ?? null });
         await interaction.deferUpdate();
         try {
+            const overview = await this.loadSquareCloudAppOverview(entry.instance);
+            const powerState = this.getAppsPowerState(entry, overview);
+            if (action === "start" && !powerState.canStart) {
+                const message = powerState.state === "unprovisioned"
+                    ? "A aplicação ainda não foi provisionada na Square Cloud."
+                    : "A aplicação já está ligada ou inicializando.";
+                const payload = await this.buildAppsPanelPayload(context.panelOwnerUserId, context.state.page, entry.key, "overview", message);
+                const updated = await this.tryUpdateTrackedAppsPanel(context.panelOwnerUserId, payload);
+                if (!updated) {
+                    await interaction.message?.edit(payload).catch(() => null);
+                }
+                return;
+            }
+            if (action === "stop" && !powerState.canStop) {
+                const message = powerState.state === "unprovisioned"
+                    ? "A aplicação ainda não foi provisionada na Square Cloud."
+                    : "A aplicação já está desligada.";
+                const payload = await this.buildAppsPanelPayload(context.panelOwnerUserId, context.state.page, entry.key, "overview", message);
+                const updated = await this.tryUpdateTrackedAppsPanel(context.panelOwnerUserId, payload);
+                if (!updated) {
+                    await interaction.message?.edit(payload).catch(() => null);
+                }
+                return;
+            }
+            const processingMessages = {
+                start: "\u2B06\uFE0F | Ligando sua aplica\u00E7\u00E3o...",
+                stop: "\u2B07\uFE0F | Desligando sua aplica\u00E7\u00E3o...",
+                restart: "\uD83D\uDD04 | Reiniciando sua aplica\u00E7\u00E3o...",
+            };
+            const processingPayload = await this.buildAppsPanelPayload(context.panelOwnerUserId, context.state.page, entry.key, "overview", processingMessages[action] ?? "\u23F3 | Atualizando sua aplica\u00E7\u00E3o...");
+            const processingUpdated = await this.tryUpdateTrackedAppsPanel(context.panelOwnerUserId, processingPayload);
+            if (!processingUpdated) {
+                await interaction.message?.edit(processingPayload).catch(() => null);
+            }
             if (action === "start") {
                 if (this.dependencies.squareCloudClient?.isConfigured?.() && !String(entry.instance.hostingAppId ?? "").startsWith("pending-")) {
                     await this.dependencies.squareCloudClient.startApp(entry.instance.hostingAppId);
@@ -2859,26 +2931,31 @@ class ManagerBotService {
                 stop: "Aplicação desligada com sucesso.",
                 restart: "Aplicação reiniciada com sucesso.",
             };
-            const successPayload = await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "overview", actionLabels[action] ?? "Aplicação atualizada.");
-            const updated = await this.tryUpdateTrackedAppsPanel(interaction.user.id, successPayload);
+            actionLabels.start = "\u2705 | Aplica\u00E7\u00E3o ligada com sucesso!";
+            actionLabels.stop = "\u2705 | Aplica\u00E7\u00E3o desligada com sucesso!";
+            actionLabels.restart = "\u2705 | Aplica\u00E7\u00E3o reiniciada com sucesso!";
+            const successPayload = await this.buildAppsPanelPayload(context.panelOwnerUserId, context.state.page, entry.key, "overview", actionLabels[action] ?? "\u2705 | Aplica\u00E7\u00E3o atualizada.");
+            const updated = await this.tryUpdateTrackedAppsPanel(context.panelOwnerUserId, successPayload);
             if (!updated) {
-                await interaction.editReply(successPayload).catch(() => null);
+                await interaction.message?.edit(successPayload).catch(() => null);
             }
         }
         catch (error) {
-            const failurePayload = await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "overview", `Falha ao executar essa ação: ${error?.message ?? "erro desconhecido"}`);
-            const updated = await this.tryUpdateTrackedAppsPanel(interaction.user.id, failurePayload);
+            const failurePayload = await this.buildAppsPanelPayload(context.panelOwnerUserId, context.state.page, entry.key, "overview", `\u274C | Falha ao executar essa a\u00E7\u00E3o: ${error?.message ?? "erro desconhecido"}`);
+            const updated = await this.tryUpdateTrackedAppsPanel(context.panelOwnerUserId, failurePayload);
             if (!updated) {
-                await interaction.editReply(failurePayload).catch(() => null);
+                await interaction.message?.edit(failurePayload).catch(() => null);
             }
         }
     }
     async handleAppsSetupButton(interaction) {
         const payload = String(interaction.customId.slice(CUSTOM_IDS.appsSetupButtonPrefix.length) ?? "").trim();
-        const [pageRaw, selectedKeyRaw] = payload.split(":");
+        const [panelOwnerUserIdRaw, pageRaw, selectedKeyRaw] = payload.split(":");
+        const panelOwnerUserId = String(panelOwnerUserIdRaw ?? "").trim() || interaction.user.id;
         const page = Math.max(0, Number(pageRaw ?? 0) || 0);
         const selectedKey = String(selectedKeyRaw ?? "").trim();
-        const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
+        const context = this.resolveAppsPanelContext(interaction, page, selectedKey);
+        const entry = context.entry;
         if (!entry?.bundle) {
             await this.replyEphemeral(interaction, "Não encontrei a assinatura selecionada.");
             return;
@@ -2892,7 +2969,7 @@ class ManagerBotService {
             await this.replyEphemeral(interaction, "Não achei um pagamento de ativação aprovado para essa assinatura.");
             return;
         }
-        this.rememberAppsPanelInteraction(interaction, { page, selectedKey, view: "overview" });
+        this.rememberAppsPanelInteraction(interaction, { page: context.state.page, selectedKey: entry.key, view: "overview", panelOwnerUserId: context.panelOwnerUserId, messageId: interaction.message?.id ?? null, channelId: interaction.channelId ?? null });
         try {
             this.dependencies.purchaseSetupService.resetSetupSession(payment.id);
             await this.persistStoreIfNeeded();
@@ -2904,79 +2981,113 @@ class ManagerBotService {
     }
     async handleAppsRenameButton(interaction) {
         const payload = String(interaction.customId.slice(CUSTOM_IDS.appsRenamePrefix.length) ?? "").trim();
-        const [pageRaw, selectedKeyRaw] = payload.split(":");
+        const [panelOwnerUserIdRaw, pageRaw, selectedKeyRaw] = payload.split(":");
+        const panelOwnerUserId = String(panelOwnerUserIdRaw ?? "").trim() || interaction.user.id;
         const page = Math.max(0, Number(pageRaw ?? 0) || 0);
         const selectedKey = String(selectedKeyRaw ?? "").trim();
-        const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
+        const context = this.resolveAppsPanelContext(interaction, page, selectedKey);
+        const entry = context.entry;
         if (!entry?.instance || !entry.discordApp) {
             await this.replyEphemeral(interaction, "Não encontrei a aplicação selecionada para renomear.");
             return;
         }
-        this.rememberAppsPanelInteraction(interaction, { page, selectedKey, view: "settings" });
-        await interaction.showModal(this.buildAppsRenameModal(page, entry));
+        if (!this.canAccessAppEntry(interaction.user.id, entry)) {
+            await this.replyEphemeral(interaction, this.buildAppsAccessDeniedMessage());
+            return;
+        }
+        this.rememberAppsPanelInteraction(interaction, { page: context.state.page, selectedKey: entry.key, view: "settings", panelOwnerUserId: context.panelOwnerUserId, messageId: interaction.message?.id ?? null, channelId: interaction.channelId ?? null });
+        await interaction.showModal(this.buildAppsRenameModal(context.panelOwnerUserId, context.state.page, entry));
     }
     async handleAppsTokenButton(interaction) {
         const payload = String(interaction.customId.slice(CUSTOM_IDS.appsTokenPrefix.length) ?? "").trim();
-        const [pageRaw, selectedKeyRaw] = payload.split(":");
+        const [panelOwnerUserIdRaw, pageRaw, selectedKeyRaw] = payload.split(":");
+        const panelOwnerUserId = String(panelOwnerUserIdRaw ?? "").trim() || interaction.user.id;
         const page = Math.max(0, Number(pageRaw ?? 0) || 0);
         const selectedKey = String(selectedKeyRaw ?? "").trim();
-        const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
+        const context = this.resolveAppsPanelContext(interaction, page, selectedKey);
+        const entry = context.entry;
         if (!entry?.instance || !entry.discordApp) {
             await this.replyEphemeral(interaction, "Não encontrei a aplicação selecionada para trocar o token.");
             return;
         }
-        this.rememberAppsPanelInteraction(interaction, { page, selectedKey, view: "settings" });
-        await interaction.showModal(this.buildAppsTokenModal(page, entry));
+        if (!this.canAccessAppEntry(interaction.user.id, entry)) {
+            await this.replyEphemeral(interaction, this.buildAppsAccessDeniedMessage());
+            return;
+        }
+        this.rememberAppsPanelInteraction(interaction, { page: context.state.page, selectedKey: entry.key, view: "settings", panelOwnerUserId: context.panelOwnerUserId, messageId: interaction.message?.id ?? null, channelId: interaction.channelId ?? null });
+        await interaction.showModal(this.buildAppsTokenModal(context.panelOwnerUserId, context.state.page, entry));
     }
     async handleAppsOwnerButton(interaction) {
         const payload = String(interaction.customId.slice(CUSTOM_IDS.appsOwnerPrefix.length) ?? "").trim();
-        const [pageRaw, selectedKeyRaw] = payload.split(":");
+        const [panelOwnerUserIdRaw, pageRaw, selectedKeyRaw] = payload.split(":");
+        const panelOwnerUserId = String(panelOwnerUserIdRaw ?? "").trim() || interaction.user.id;
         const page = Math.max(0, Number(pageRaw ?? 0) || 0);
         const selectedKey = String(selectedKeyRaw ?? "").trim();
-        const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
+        const context = this.resolveAppsPanelContext(interaction, page, selectedKey);
+        const entry = context.entry;
         if (!entry?.instance || !entry.discordApp) {
             await this.replyEphemeral(interaction, "Não encontrei a aplicação selecionada para trocar o dono do bot.");
             return;
         }
-        this.rememberAppsPanelInteraction(interaction, { page, selectedKey, view: "settings" });
-        await interaction.showModal(this.buildAppsOwnerModal(page, entry));
+        if (!this.canAccessAppEntry(interaction.user.id, entry)) {
+            await this.replyEphemeral(interaction, this.buildAppsAccessDeniedMessage());
+            return;
+        }
+        this.rememberAppsPanelInteraction(interaction, { page: context.state.page, selectedKey: entry.key, view: "settings", panelOwnerUserId: context.panelOwnerUserId, messageId: interaction.message?.id ?? null, channelId: interaction.channelId ?? null });
+        await interaction.showModal(this.buildAppsOwnerModal(context.panelOwnerUserId, context.state.page, entry));
     }
     async handleAppsTransferButton(interaction) {
         const payload = String(interaction.customId.slice(CUSTOM_IDS.appsTransferPrefix.length) ?? "").trim();
-        const [pageRaw, selectedKeyRaw] = payload.split(":");
+        const [panelOwnerUserIdRaw, pageRaw, selectedKeyRaw] = payload.split(":");
+        const panelOwnerUserId = String(panelOwnerUserIdRaw ?? "").trim() || interaction.user.id;
         const page = Math.max(0, Number(pageRaw ?? 0) || 0);
         const selectedKey = String(selectedKeyRaw ?? "").trim();
-        const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
+        const context = this.resolveAppsPanelContext(interaction, page, selectedKey);
+        const entry = context.entry;
         if (!entry?.bundle) {
             await this.replyEphemeral(interaction, "Não encontrei a aplicação selecionada para transferir.");
             return;
         }
-        this.rememberAppsPanelInteraction(interaction, { page, selectedKey, view: "settings" });
-        await interaction.showModal(this.buildAppsTransferModal(page, entry));
+        if (!this.canManageSubscription(interaction.user.id, entry.bundle.subscription)) {
+            await this.replyEphemeral(interaction, "Somente admins ou o dono comercial da assinatura podem transferir essa aplicaÃ§Ã£o.");
+            return;
+        }
+        this.rememberAppsPanelInteraction(interaction, { page: context.state.page, selectedKey: entry.key, view: "settings", panelOwnerUserId: context.panelOwnerUserId, messageId: interaction.message?.id ?? null, channelId: interaction.channelId ?? null });
+        await interaction.showModal(this.buildAppsTransferModal(context.panelOwnerUserId, context.state.page, entry));
     }
     async handleAppsDeleteButton(interaction) {
         const payload = String(interaction.customId.slice(CUSTOM_IDS.appsDeletePrefix.length) ?? "").trim();
-        const [pageRaw, selectedKeyRaw] = payload.split(":");
+        const [panelOwnerUserIdRaw, pageRaw, selectedKeyRaw] = payload.split(":");
+        const panelOwnerUserId = String(panelOwnerUserIdRaw ?? "").trim() || interaction.user.id;
         const page = Math.max(0, Number(pageRaw ?? 0) || 0);
         const selectedKey = String(selectedKeyRaw ?? "").trim();
-        const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
+        const context = this.resolveAppsPanelContext(interaction, page, selectedKey);
+        const entry = context.entry;
         if (!entry?.instance) {
             await this.replyEphemeral(interaction, "Não encontrei a aplicação selecionada para deletar.");
             return;
         }
-        this.rememberAppsPanelInteraction(interaction, { page, selectedKey, view: "settings" });
-        await interaction.showModal(this.buildAppsDeleteModal(page, entry));
+        if (!entry?.bundle?.subscription || !this.canManageSubscription(interaction.user.id, entry.bundle.subscription)) {
+            await this.replyEphemeral(interaction, "Somente admins ou o dono comercial da assinatura podem deletar essa aplicaÃ§Ã£o.");
+            return;
+        }
+        this.rememberAppsPanelInteraction(interaction, { page: context.state.page, selectedKey: entry.key, view: "settings", panelOwnerUserId: context.panelOwnerUserId, messageId: interaction.message?.id ?? null, channelId: interaction.channelId ?? null });
+        await interaction.showModal(this.buildAppsDeleteModal(context.panelOwnerUserId, context.state.page, entry));
     }
     async handleAppsRenameModal(interaction) {
         const payload = String(interaction.customId.slice(MODAL_IDS.appRenamePrefix.length) ?? "").trim();
-        const [pageRaw, selectedKeyRaw] = payload.split(":");
+        const [panelOwnerUserIdRaw, pageRaw, selectedKeyRaw] = payload.split(":");
+        const panelOwnerUserId = String(panelOwnerUserIdRaw ?? "").trim() || interaction.user.id;
         const page = Math.max(0, Number(pageRaw ?? 0) || 0);
         const selectedKey = String(selectedKeyRaw ?? "").trim();
         await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
         try {
-            const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
+            const entry = this.findOwnedAppEntryByKey(panelOwnerUserId, selectedKey);
             if (!entry?.instance || !entry.discordApp) {
                 throw new Error("Aplicação não encontrada.");
+            }
+            if (!this.canAccessAppEntry(interaction.user.id, entry)) {
+                throw new Error(this.buildAppsAccessDeniedMessage());
             }
             const desiredName = String(interaction.fields.getTextInputValue("apps_rename_name") ?? "").trim();
             if (!desiredName) {
@@ -2994,22 +3105,26 @@ class ManagerBotService {
             entry.instance.updatedAt = new Date().toISOString();
             await this.syncManagedInstanceRuntime(entry.instance, entry.discordApp);
             await this.persistStoreIfNeeded();
-            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "settings", "Nome da aplicação atualizado com sucesso."));
+            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(panelOwnerUserId, page, selectedKey, "settings", "Nome da aplicação atualizado com sucesso."), panelOwnerUserId);
         }
         catch (error) {
-            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "settings", `Falha ao alterar o nome da aplicação: ${error?.message ?? "erro desconhecido"}`));
+            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(panelOwnerUserId, page, selectedKey, "settings", `Falha ao alterar o nome da aplicação: ${error?.message ?? "erro desconhecido"}`), panelOwnerUserId);
         }
     }
     async handleAppsTokenModal(interaction) {
         const payload = String(interaction.customId.slice(MODAL_IDS.appTokenPrefix.length) ?? "").trim();
-        const [pageRaw, selectedKeyRaw] = payload.split(":");
+        const [panelOwnerUserIdRaw, pageRaw, selectedKeyRaw] = payload.split(":");
+        const panelOwnerUserId = String(panelOwnerUserIdRaw ?? "").trim() || interaction.user.id;
         const page = Math.max(0, Number(pageRaw ?? 0) || 0);
         const selectedKey = String(selectedKeyRaw ?? "").trim();
         await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
         try {
-            const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
+            const entry = this.findOwnedAppEntryByKey(panelOwnerUserId, selectedKey);
             if (!entry?.instance || !entry.discordApp) {
                 throw new Error("Aplicação não encontrada.");
+            }
+            if (!this.canAccessAppEntry(interaction.user.id, entry)) {
+                throw new Error(this.buildAppsAccessDeniedMessage());
             }
             const nextToken = String(interaction.fields.getTextInputValue("apps_token_value") ?? "").trim();
             if (!nextToken) {
@@ -3027,22 +3142,26 @@ class ManagerBotService {
             entry.instance.updatedAt = new Date().toISOString();
             await this.syncManagedInstanceRuntime(entry.instance, entry.discordApp);
             await this.persistStoreIfNeeded();
-            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "settings", "Token da aplicação atualizado com sucesso."));
+            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(panelOwnerUserId, page, selectedKey, "settings", "Token da aplicação atualizado com sucesso."), panelOwnerUserId);
         }
         catch (error) {
-            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "settings", `Falha ao alterar o token da aplicação: ${error?.message ?? "erro desconhecido"}`));
+            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(panelOwnerUserId, page, selectedKey, "settings", `Falha ao alterar o token da aplicação: ${error?.message ?? "erro desconhecido"}`), panelOwnerUserId);
         }
     }
     async handleAppsOwnerModal(interaction) {
         const payload = String(interaction.customId.slice(MODAL_IDS.appOwnerPrefix.length) ?? "").trim();
-        const [pageRaw, selectedKeyRaw] = payload.split(":");
+        const [panelOwnerUserIdRaw, pageRaw, selectedKeyRaw] = payload.split(":");
+        const panelOwnerUserId = String(panelOwnerUserIdRaw ?? "").trim() || interaction.user.id;
         const page = Math.max(0, Number(pageRaw ?? 0) || 0);
         const selectedKey = String(selectedKeyRaw ?? "").trim();
         await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
         try {
-            const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
+            const entry = this.findOwnedAppEntryByKey(panelOwnerUserId, selectedKey);
             if (!entry?.instance || !entry.discordApp) {
                 throw new Error("Aplicação não encontrada.");
+            }
+            if (!this.canAccessAppEntry(interaction.user.id, entry)) {
+                throw new Error(this.buildAppsAccessDeniedMessage());
             }
             const nextOwnerDiscordUserId = String(interaction.fields.getTextInputValue("apps_owner_user_id") ?? "").trim();
             if (!/^\d{5,32}$/u.test(nextOwnerDiscordUserId)) {
@@ -3056,22 +3175,26 @@ class ManagerBotService {
             entry.instance.updatedAt = new Date().toISOString();
             await this.syncManagedInstanceRuntime(entry.instance, entry.discordApp);
             await this.persistStoreIfNeeded();
-            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "settings", "Dono do bot atualizado com sucesso."));
+            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(panelOwnerUserId, page, selectedKey, "settings", "Dono do bot atualizado com sucesso."), panelOwnerUserId);
         }
         catch (error) {
-            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "settings", `Falha ao alterar o dono do bot: ${error?.message ?? "erro desconhecido"}`));
+            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(panelOwnerUserId, page, selectedKey, "settings", `Falha ao alterar o dono do bot: ${error?.message ?? "erro desconhecido"}`), panelOwnerUserId);
         }
     }
     async handleAppsTransferModal(interaction) {
         const payload = String(interaction.customId.slice(MODAL_IDS.appTransferPrefix.length) ?? "").trim();
-        const [pageRaw, selectedKeyRaw] = payload.split(":");
+        const [panelOwnerUserIdRaw, pageRaw, selectedKeyRaw] = payload.split(":");
+        const panelOwnerUserId = String(panelOwnerUserIdRaw ?? "").trim() || interaction.user.id;
         const page = Math.max(0, Number(pageRaw ?? 0) || 0);
         const selectedKey = String(selectedKeyRaw ?? "").trim();
         await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
         try {
-            const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
+            const entry = this.findOwnedAppEntryByKey(panelOwnerUserId, selectedKey);
             if (!entry?.bundle?.subscription) {
                 throw new Error("Aplicação não encontrada.");
+            }
+            if (!this.canManageSubscription(interaction.user.id, entry.bundle.subscription)) {
+                throw new Error("Somente admins ou o dono comercial da assinatura podem transferir essa aplicação.");
             }
             const nextCommercialOwnerDiscordUserId = String(interaction.fields.getTextInputValue("apps_transfer_user_id") ?? "").trim();
             if (!/^\d{5,32}$/u.test(nextCommercialOwnerDiscordUserId)) {
@@ -3086,22 +3209,26 @@ class ManagerBotService {
             if (interaction.guild) {
                 await this.tryGrantCustomerRole(interaction.guild, nextCommercialOwnerDiscordUserId).catch(() => null);
             }
-            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, null, "overview", `Posse da aplicação transferida para <@${nextCommercialOwnerDiscordUserId}>. Ela não aparecerá mais no seu /apps.`));
+            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(panelOwnerUserId, page, null, "overview", `Posse da aplicação transferida para <@${nextCommercialOwnerDiscordUserId}>. Ela não aparecerá mais no seu /apps.`), panelOwnerUserId);
         }
         catch (error) {
-            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "settings", `Falha ao transferir a posse da aplicação: ${error?.message ?? "erro desconhecido"}`));
+            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(panelOwnerUserId, page, selectedKey, "settings", `Falha ao transferir a posse da aplicação: ${error?.message ?? "erro desconhecido"}`), panelOwnerUserId);
         }
     }
     async handleAppsDeleteModal(interaction) {
         const payload = String(interaction.customId.slice(MODAL_IDS.appDeletePrefix.length) ?? "").trim();
-        const [pageRaw, selectedKeyRaw] = payload.split(":");
+        const [panelOwnerUserIdRaw, pageRaw, selectedKeyRaw] = payload.split(":");
+        const panelOwnerUserId = String(panelOwnerUserIdRaw ?? "").trim() || interaction.user.id;
         const page = Math.max(0, Number(pageRaw ?? 0) || 0);
         const selectedKey = String(selectedKeyRaw ?? "").trim();
         await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
         try {
-            const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
+            const entry = this.findOwnedAppEntryByKey(panelOwnerUserId, selectedKey);
             if (!entry?.instance || !entry.bundle?.subscription) {
                 throw new Error("Aplicação não encontrada.");
+            }
+            if (!this.canManageSubscription(interaction.user.id, entry.bundle.subscription)) {
+                throw new Error("Somente admins ou o dono comercial da assinatura podem deletar essa aplicação.");
             }
             const confirmation = normalizeTextForMatch(interaction.fields.getTextInputValue("apps_delete_confirm"));
             const acceptedValues = new Set([
@@ -3117,10 +3244,10 @@ class ManagerBotService {
             entry.bundle.subscription.status = "deleted";
             entry.bundle.subscription.updatedAt = new Date().toISOString();
             await this.persistStoreIfNeeded();
-            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, null, "overview", "Aplicação deletada com sucesso."));
+            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(panelOwnerUserId, page, null, "overview", "Aplicação deletada com sucesso."), panelOwnerUserId);
         }
         catch (error) {
-            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, "settings", `Falha ao deletar a aplicação: ${error?.message ?? "erro desconhecido"}`));
+            await this.updateAppsModalReply(interaction, await this.buildAppsPanelPayload(panelOwnerUserId, page, selectedKey, "settings", `Falha ao deletar a aplicação: ${error?.message ?? "erro desconhecido"}`), panelOwnerUserId);
         }
     }
     buildSalesPanelMessage(product = null) {
@@ -3935,7 +4062,75 @@ class ManagerBotService {
                 .setStyle(discord_js_1.ButtonStyle.Secondary)),
         ]);
     }
+    buildAppEntryFromBundle(bundle) {
+        const instance = bundle?.instance ?? null;
+        const discordApp = instance
+            ? this.dependencies.store.discordApps.find((entry) => entry.id === instance.discordAppId) ?? null
+            : null;
+        const setupReady = !instance &&
+            bundle?.product?.botProvisioningMode === "customer_token" &&
+            bundle?.subscription?.status === "active" &&
+            Boolean(this.findApprovedActivationPayment(bundle.subscription.id));
+        const displayName = clampText(instance?.config?.discordAppName ??
+            discordApp?.appName ??
+            bundle?.product?.name ??
+            "AplicaÃ§Ã£o", 100, "AplicaÃ§Ã£o");
+        const subtitle = clampText(instance?.hostingAppId ??
+            bundle?.subscription?.id ??
+            bundle?.product?.slug ??
+            "app", 100, "app");
+        return {
+            key: instance ? `inst_${instance.id}` : `sub_${bundle?.subscription?.id}`,
+            bundle,
+            instance,
+            discordApp,
+            setupReady,
+            displayName,
+            subtitle,
+        };
+    }
+    listManagedAppBundles() {
+        return this.dependencies.store.subscriptions
+            .map((subscription) => this.dependencies.subscriptionService.getById(subscription.id))
+            .filter(Boolean)
+            .filter((bundle) => ["active", "grace", "suspended"].includes(String(bundle?.subscription?.status ?? "").toLowerCase()));
+    }
+    isBotApplicationOwner(userId, entry) {
+        const normalizedUserId = String(userId ?? "").trim();
+        if (!normalizedUserId || !entry) {
+            return false;
+        }
+        const ownerCandidates = [
+            entry.instance?.config?.ownerDiscordUserId,
+            entry.discordApp?.runtimeEnv?.CUSTOMER_OWNER_DISCORD_USER_ID,
+        ]
+            .map((value) => String(value ?? "").trim())
+            .filter(Boolean);
+        return ownerCandidates.includes(normalizedUserId);
+    }
+    canAccessAppEntry(userId, entry) {
+        const normalizedUserId = String(userId ?? "").trim();
+        if (!normalizedUserId || !entry) {
+            return false;
+        }
+        if (this.hasAdminAccess({ user: { id: normalizedUserId } })) {
+            return true;
+        }
+        if (entry.bundle?.subscription && this.canManageSubscription(normalizedUserId, entry.bundle.subscription)) {
+            return true;
+        }
+        return this.isBotApplicationOwner(normalizedUserId, entry);
+    }
     buildOwnedAppEntries(userId) {
+        const normalizedUserId = String(userId ?? "").trim();
+        return this.listManagedAppBundles()
+            .map((bundle) => this.buildAppEntryFromBundle(bundle))
+            .filter((entry) => this.canAccessAppEntry(normalizedUserId, entry))
+            .sort((left, right) => {
+            const leftDate = Date.parse(left.instance?.updatedAt ?? left.bundle.subscription.updatedAt ?? left.bundle.subscription.createdAt ?? 0);
+            const rightDate = Date.parse(right.instance?.updatedAt ?? right.bundle.subscription.updatedAt ?? right.bundle.subscription.createdAt ?? 0);
+            return rightDate - leftDate;
+        });
         return this.dependencies.subscriptionService
             .listByDiscordUserId(userId)
             .filter(Boolean)
@@ -3980,6 +4175,70 @@ class ManagerBotService {
         }
         return this.buildOwnedAppEntries(userId).find((entry) => entry.key === normalizedKey) ?? null;
     }
+    findManagedAppEntryByKey(key) {
+        const normalizedKey = String(key ?? "").trim();
+        if (!normalizedKey) {
+            return null;
+        }
+        return this.listManagedAppBundles()
+            .map((bundle) => this.buildAppEntryFromBundle(bundle))
+            .find((entry) => entry.key === normalizedKey) ?? null;
+    }
+    findTrackedAppsPanelByMessage(messageId, channelId = null) {
+        const normalizedMessageId = String(messageId ?? "").trim();
+        const normalizedChannelId = String(channelId ?? "").trim();
+        if (!normalizedMessageId) {
+            return null;
+        }
+        for (const [ownerUserId, tracked] of this.trackedAppsPanels.entries()) {
+            if (String(tracked?.messageId ?? "").trim() !== normalizedMessageId) {
+                continue;
+            }
+            if (normalizedChannelId && String(tracked?.channelId ?? "").trim() && String(tracked.channelId).trim() !== normalizedChannelId) {
+                continue;
+            }
+            return { ownerUserId, tracked };
+        }
+        return null;
+    }
+    resolveAppsPanelContext(interaction, requestedPage = 0, selectedKey = null) {
+        const trackedPanel = this.findTrackedAppsPanelByMessage(interaction?.message?.id, interaction?.channelId ?? null);
+        const panelOwnerUserId = String(trackedPanel?.ownerUserId ?? interaction?.user?.id ?? "").trim();
+        const entries = this.buildOwnedAppEntries(panelOwnerUserId);
+        const state = this.resolveAppsSelection(entries, requestedPage, selectedKey);
+        return {
+            panelOwnerUserId,
+            trackedPanel,
+            entries,
+            state,
+            entry: state.selected ?? entries[0] ?? null,
+        };
+    }
+    buildAppsAccessDeniedMessage() {
+        return "Somente admins, o dono comercial da assinatura ou o dono configurado do bot podem usar esse painel.";
+    }
+    canOpenAppsSettings(entry, overview = null) {
+        if (!entry?.instance) {
+            return false;
+        }
+        return this.getAppsPowerState(entry, overview).state === "running";
+    }
+    async buildAppsPanelViewPayload(panelOwnerUserId, page, selectedKey, requestedView, entry, notice = null) {
+        const normalizedView = requestedView === "settings" ? "settings" : "overview";
+        if (normalizedView === "settings") {
+            const overview = entry?.instance ? await this.loadSquareCloudAppOverview(entry.instance) : null;
+            if (!this.canOpenAppsSettings(entry, overview)) {
+                return {
+                    view: "overview",
+                    payload: await this.buildAppsPanelPayload(panelOwnerUserId, page, selectedKey, "overview", "Seu bot est\u00E1 desligado, para entrar nas configura\u00E7\u00F5es dele voc\u00EA deve lig\u00E1-lo!"),
+                };
+            }
+        }
+        return {
+            view: normalizedView,
+            payload: await this.buildAppsPanelPayload(panelOwnerUserId, page, selectedKey, normalizedView, notice),
+        };
+    }
     resolveAppsSelection(entries, requestedPage = 0, selectedKey = null) {
         const pageSize = 25;
         const total = entries.length;
@@ -4021,8 +4280,8 @@ class ManagerBotService {
             ? this.buildAppsSettingsEmbed(selectedEntry, notice)
             : this.buildAppsOverviewEmbed(selectedEntry, squareCloudOverview, notice);
         const actionRows = currentView === "settings"
-            ? this.buildAppsSettingsComponents(selectedEntry, state.page)
-            : this.buildAppsOverviewComponents(selectedEntry, state.page);
+            ? this.buildAppsSettingsComponents(userId, selectedEntry, state.page)
+            : this.buildAppsOverviewComponents(userId, selectedEntry, state.page, squareCloudOverview);
         const selectRow = this.buildAppsSelectRow(state.pageEntries, state.page, currentView, selectedEntry?.key ?? "");
         const paginationRow = this.buildAppsPaginationRow(state.page, state.pageCount, selectedEntry?.key ?? "", currentView);
         return {
@@ -4316,7 +4575,7 @@ class ManagerBotService {
             rawStatus,
         };
     }
-    buildAppsOverviewComponents(entry, page, overview = null) {
+    buildAppsOverviewComponents(panelOwnerUserId, entry, page, overview = null) {
         if (!entry) {
             return [];
         }
@@ -4348,7 +4607,7 @@ class ManagerBotService {
         if (entry.setupReady) {
             const rows = [
                 new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
-                    .setCustomId(`${CUSTOM_IDS.appsSetupButtonPrefix}${page}:${entry.key}`)
+                    .setCustomId(`${CUSTOM_IDS.appsSetupButtonPrefix}${panelOwnerUserId}:${page}:${entry.key}`)
                     .setLabel("Configurar Bot")
                     .setEmoji("\uD83E\uDD16")
                     .setStyle(discord_js_1.ButtonStyle.Primary), ...(isLikelyHttpUrl(entry.bundle.product?.tutorialUrl)
@@ -4365,30 +4624,30 @@ class ManagerBotService {
         }
         return [];
     }
-    buildAppsSettingsComponents(entry, page) {
+    buildAppsSettingsComponents(panelOwnerUserId, entry, page) {
         if (!entry?.instance) {
-            return this.buildAppsOverviewComponents(entry, page);
+            return this.buildAppsOverviewComponents(panelOwnerUserId, entry, page);
         }
         const rows = [
             new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
-                .setCustomId(`${CUSTOM_IDS.appsRenamePrefix}${page}:${entry.key}`)
+                .setCustomId(`${CUSTOM_IDS.appsRenamePrefix}${panelOwnerUserId}:${page}:${entry.key}`)
                 .setLabel("Alterar Nome da Aplicação")
                 .setEmoji("\u270F\uFE0F")
                 .setStyle(discord_js_1.ButtonStyle.Success), new discord_js_1.ButtonBuilder()
-                .setCustomId(`${CUSTOM_IDS.appsTokenPrefix}${page}:${entry.key}`)
+                .setCustomId(`${CUSTOM_IDS.appsTokenPrefix}${panelOwnerUserId}:${page}:${entry.key}`)
                 .setLabel("Alterar Token")
                 .setEmoji("\uD83D\uDD11")
                 .setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder()
-                .setCustomId(`${CUSTOM_IDS.appsOwnerPrefix}${page}:${entry.key}`)
+                .setCustomId(`${CUSTOM_IDS.appsOwnerPrefix}${panelOwnerUserId}:${page}:${entry.key}`)
                 .setLabel("Alterar Dono do Bot")
                 .setEmoji("\uD83D\uDD27")
                 .setStyle(discord_js_1.ButtonStyle.Secondary)),
             new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
-                .setCustomId(`${CUSTOM_IDS.appsTransferPrefix}${page}:${entry.key}`)
+                .setCustomId(`${CUSTOM_IDS.appsTransferPrefix}${panelOwnerUserId}:${page}:${entry.key}`)
                 .setLabel("Transferir Posse da Aplicação")
                 .setEmoji("\uD83D\uDCCB")
                 .setStyle(discord_js_1.ButtonStyle.Danger), new discord_js_1.ButtonBuilder()
-                .setCustomId(`${CUSTOM_IDS.appsDeletePrefix}${page}:${entry.key}`)
+                .setCustomId(`${CUSTOM_IDS.appsDeletePrefix}${panelOwnerUserId}:${page}:${entry.key}`)
                 .setLabel("Deletar Aplicação")
                 .setEmoji("\uD83D\uDDD1\uFE0F")
                 .setStyle(discord_js_1.ButtonStyle.Danger), entry.instance.installUrl
@@ -4453,7 +4712,7 @@ class ManagerBotService {
             .setStyle(discord_js_1.ButtonStyle.Secondary)
             .setDisabled(page >= pageCount - 1));
     }
-    buildAppsRenameModal(page, entry) {
+    buildAppsRenameModal(panelOwnerUserId, page, entry) {
         const nameInput = new discord_js_1.TextInputBuilder()
             .setCustomId("apps_rename_name")
             .setLabel("Novo nome da aplicação")
@@ -4461,11 +4720,11 @@ class ManagerBotService {
             .setRequired(true)
             .setValue(String(entry.discordApp?.appName ?? entry.instance?.config?.discordAppName ?? entry.displayName).slice(0, 100));
         return new discord_js_1.ModalBuilder()
-            .setCustomId(`${MODAL_IDS.appRenamePrefix}${page}:${entry.key}`)
+            .setCustomId(`${MODAL_IDS.appRenamePrefix}${panelOwnerUserId}:${page}:${entry.key}`)
             .setTitle("Alterar Nome da Aplicação")
             .addComponents(new discord_js_1.ActionRowBuilder().addComponents(nameInput));
     }
-    buildAppsTokenModal(page, entry) {
+    buildAppsTokenModal(panelOwnerUserId, page, entry) {
         const tokenInput = new discord_js_1.TextInputBuilder()
             .setCustomId("apps_token_value")
             .setLabel("Novo token do bot")
@@ -4473,11 +4732,11 @@ class ManagerBotService {
             .setRequired(true)
             .setPlaceholder("Cole aqui o token do bot");
         return new discord_js_1.ModalBuilder()
-            .setCustomId(`${MODAL_IDS.appTokenPrefix}${page}:${entry.key}`)
+            .setCustomId(`${MODAL_IDS.appTokenPrefix}${panelOwnerUserId}:${page}:${entry.key}`)
             .setTitle(`Token | ${entry.displayName}`.slice(0, 45))
             .addComponents(new discord_js_1.ActionRowBuilder().addComponents(tokenInput));
     }
-    buildAppsOwnerModal(page, entry) {
+    buildAppsOwnerModal(panelOwnerUserId, page, entry) {
         const ownerInput = new discord_js_1.TextInputBuilder()
             .setCustomId("apps_owner_user_id")
             .setLabel("Novo dono do bot (Discord ID)")
@@ -4485,11 +4744,11 @@ class ManagerBotService {
             .setRequired(true)
             .setValue(String(entry.instance?.config?.ownerDiscordUserId ?? "").slice(0, 32));
         return new discord_js_1.ModalBuilder()
-            .setCustomId(`${MODAL_IDS.appOwnerPrefix}${page}:${entry.key}`)
+            .setCustomId(`${MODAL_IDS.appOwnerPrefix}${panelOwnerUserId}:${page}:${entry.key}`)
             .setTitle("Alterar Dono do Bot")
             .addComponents(new discord_js_1.ActionRowBuilder().addComponents(ownerInput));
     }
-    buildAppsTransferModal(page, entry) {
+    buildAppsTransferModal(panelOwnerUserId, page, entry) {
         const transferInput = new discord_js_1.TextInputBuilder()
             .setCustomId("apps_transfer_user_id")
             .setLabel("Novo dono comercial (Discord ID)")
@@ -4497,11 +4756,11 @@ class ManagerBotService {
             .setRequired(true)
             .setValue(String(entry.bundle.subscription.commercialOwnerDiscordUserId ?? "").slice(0, 32));
         return new discord_js_1.ModalBuilder()
-            .setCustomId(`${MODAL_IDS.appTransferPrefix}${page}:${entry.key}`)
+            .setCustomId(`${MODAL_IDS.appTransferPrefix}${panelOwnerUserId}:${page}:${entry.key}`)
             .setTitle("Transferir Posse da Aplicação")
             .addComponents(new discord_js_1.ActionRowBuilder().addComponents(transferInput));
     }
-    buildAppsDeleteModal(page, entry) {
+    buildAppsDeleteModal(panelOwnerUserId, page, entry) {
         const deleteInput = new discord_js_1.TextInputBuilder()
             .setCustomId("apps_delete_confirm")
             .setLabel("Digite DELETAR ou o ID da aplicação")
@@ -4509,7 +4768,7 @@ class ManagerBotService {
             .setRequired(true)
             .setPlaceholder(entry.instance?.id ?? "DELETAR");
         return new discord_js_1.ModalBuilder()
-            .setCustomId(`${MODAL_IDS.appDeletePrefix}${page}:${entry.key}`)
+            .setCustomId(`${MODAL_IDS.appDeletePrefix}${panelOwnerUserId}:${page}:${entry.key}`)
             .setTitle("Deletar Aplicação")
             .addComponents(new discord_js_1.ActionRowBuilder().addComponents(deleteInput));
     }
@@ -6109,12 +6368,19 @@ class ManagerBotService {
         }
         const subscription = this.dependencies.store.subscriptions.find((entry) => entry.id === instance.subscriptionId);
         if (!subscription) {
-            return false;
+            const ownerDiscordUserId = String(instance?.config?.ownerDiscordUserId ?? "").trim();
+            return Boolean(ownerDiscordUserId) && ownerDiscordUserId === String(userId).trim();
         }
         if (String(subscription.commercialOwnerDiscordUserId ?? "").trim() === userId) {
             return true;
         }
-        return false;
+        const bundle = this.dependencies.subscriptionService.getById(subscription.id);
+        if (!bundle) {
+            const ownerDiscordUserId = String(instance?.config?.ownerDiscordUserId ?? "").trim();
+            return Boolean(ownerDiscordUserId) && ownerDiscordUserId === String(userId).trim();
+        }
+        const entry = this.buildAppEntryFromBundle(bundle);
+        return this.canAccessAppEntry(userId, entry);
     }
     hasAdminAccess(target) {
         const access = this.dependencies.managerRuntimeConfigService.getResolvedAccessControl();
@@ -6286,7 +6552,7 @@ class ManagerBotService {
         }
     }
     rememberAppsPanelInteraction(interaction, state = {}) {
-        const userId = String(interaction?.user?.id ?? "").trim();
+        const userId = String(state?.panelOwnerUserId ?? interaction?.user?.id ?? "").trim();
         if (!userId) {
             return;
         }
@@ -6300,8 +6566,8 @@ class ManagerBotService {
         this.trackedAppsPanels.set(userId, {
             createdAt: Date.now(),
             sourceInteraction: interaction,
-            channelId: interaction?.channelId ?? null,
-            messageId: interaction?.message?.id ?? null,
+            channelId: state?.channelId ?? interaction?.channelId ?? previousTracked?.channelId ?? null,
+            messageId: state?.messageId ?? interaction?.message?.id ?? previousTracked?.messageId ?? null,
             page: normalizedPage,
             selectedKey: normalizedSelectedKey,
             view: normalizedView,
@@ -6363,6 +6629,22 @@ class ManagerBotService {
         }
         catch {
         }
+        try {
+            const channelId = String(tracked?.channelId ?? "").trim();
+            const messageId = String(tracked?.messageId ?? "").trim();
+            if (channelId && messageId) {
+                const channel = this.client.channels.cache.get(channelId) ?? (await this.client.channels.fetch(channelId).catch(() => null));
+                if (channel?.isTextBased?.() && typeof channel.messages?.fetch === "function") {
+                    const message = await channel.messages.fetch(messageId).catch(() => null);
+                    if (message && typeof message.edit === "function") {
+                        await message.edit(payload);
+                        return true;
+                    }
+                }
+            }
+        }
+        catch {
+        }
         return false;
     }
     async updateTrackedAppsPanelReply(userId, payload) {
@@ -6372,8 +6654,8 @@ class ManagerBotService {
         }
         return false;
     }
-    async updateAppsModalReply(interaction, payload) {
-        const updated = await this.tryUpdateTrackedAppsPanel(interaction.user.id, payload);
+    async updateAppsModalReply(interaction, payload, panelOwnerUserId = null) {
+        const updated = await this.tryUpdateTrackedAppsPanel(panelOwnerUserId ?? interaction.user.id, payload);
         if (updated) {
             await interaction.deleteReply().catch(() => null);
             return;
