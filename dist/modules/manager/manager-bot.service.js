@@ -121,6 +121,8 @@ const MODAL_IDS = {
 const PENDING_UPLOAD_TTL_MS = 10 * 60 * 1000;
 const ADMIN_PANEL_TRACK_TTL_MS = 15 * 60 * 1000;
 const APPS_PANEL_TRACK_TTL_MS = 15 * 60 * 1000;
+const APPS_PANEL_REFRESH_INTERVAL_MS = 30 * 1000;
+const SQUARECLOUD_DEFAULT_STORAGE_BYTES = 10 * 1024 * 1024 * 1024;
 const MAX_P12_BYTES = 10 * 1024 * 1024;
 function normalizeTextForMatch(value) {
     return String(value ?? "")
@@ -237,6 +239,7 @@ class ManagerBotService {
     pendingUploads = new Map();
     trackedAdminPanels = new Map();
     trackedAppsPanels = new Map();
+    trackedAppsPanelRefreshTimers = new Map();
     cartStateCache = new Map();
     cartTopicSyncTimers = new Map();
     cartInactivityTimers = new Map();
@@ -362,6 +365,10 @@ class ManagerBotService {
             return;
         }
         this.stopCustomerRoleSyncTimer();
+        for (const timer of this.trackedAppsPanelRefreshTimers.values()) {
+            clearTimeout(timer);
+        }
+        this.trackedAppsPanelRefreshTimers.clear();
         for (const timer of this.cartTopicSyncTimers.values()) {
             clearTimeout(timer);
         }
@@ -1439,7 +1446,7 @@ class ManagerBotService {
         await interaction.deferReply({ flags: discord_js_1.MessageFlags.Ephemeral });
         const payload = await this.buildAppsPanelPayload(interaction.user.id);
         await interaction.editReply(payload);
-        this.rememberAppsPanelInteraction(interaction);
+        this.rememberAppsPanelInteraction(interaction, { page: 0, selectedKey: null, view: "overview" });
     }
     async handleRenewCommand(interaction) {
         const quantity = interaction.options.getInteger("quantidade") ?? 1;
@@ -2788,7 +2795,7 @@ class ManagerBotService {
         const [pageRaw, viewRaw] = payload.split(":");
         const selectedKey = String(interaction.values?.[0] ?? "").trim();
         const page = Math.max(0, Number(pageRaw ?? 0) || 0);
-        this.rememberAppsPanelInteraction(interaction);
+        this.rememberAppsPanelInteraction(interaction, { page, selectedKey, view: viewRaw === "settings" ? "settings" : "overview" });
         await interaction.deferUpdate();
         await interaction.editReply(await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, viewRaw === "settings" ? "settings" : "overview")).catch(() => null);
     }
@@ -2797,7 +2804,7 @@ class ManagerBotService {
         const [pageRaw, selectedKeyRaw, viewRaw] = payload.split(":");
         const page = Math.max(0, Number(pageRaw ?? 0) || 0);
         const selectedKey = String(selectedKeyRaw ?? "").trim();
-        this.rememberAppsPanelInteraction(interaction);
+        this.rememberAppsPanelInteraction(interaction, { page, selectedKey, view: viewRaw === "settings" ? "settings" : "overview" });
         await interaction.deferUpdate();
         await interaction.editReply(await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, viewRaw === "settings" ? "settings" : "overview")).catch(() => null);
     }
@@ -2806,7 +2813,7 @@ class ManagerBotService {
         const [viewRaw, pageRaw, selectedKeyRaw] = payload.split(":");
         const page = Math.max(0, Number(pageRaw ?? 0) || 0);
         const selectedKey = String(selectedKeyRaw ?? "").trim();
-        this.rememberAppsPanelInteraction(interaction);
+        this.rememberAppsPanelInteraction(interaction, { page, selectedKey, view: viewRaw === "settings" ? "settings" : "overview" });
         await interaction.deferUpdate();
         await interaction.editReply(await this.buildAppsPanelPayload(interaction.user.id, page, selectedKey, viewRaw === "settings" ? "settings" : "overview")).catch(() => null);
     }
@@ -2824,7 +2831,7 @@ class ManagerBotService {
             await this.replyEphemeral(interaction, "Você não pode controlar essa aplicação.");
             return;
         }
-        this.rememberAppsPanelInteraction(interaction);
+        this.rememberAppsPanelInteraction(interaction, { page, selectedKey, view: "overview" });
         await interaction.deferUpdate();
         try {
             if (action === "start") {
@@ -2868,7 +2875,8 @@ class ManagerBotService {
     }
     async handleAppsSetupButton(interaction) {
         const payload = String(interaction.customId.slice(CUSTOM_IDS.appsSetupButtonPrefix.length) ?? "").trim();
-        const [_pageRaw, selectedKeyRaw] = payload.split(":");
+        const [pageRaw, selectedKeyRaw] = payload.split(":");
+        const page = Math.max(0, Number(pageRaw ?? 0) || 0);
         const selectedKey = String(selectedKeyRaw ?? "").trim();
         const entry = this.findOwnedAppEntryByKey(interaction.user.id, selectedKey);
         if (!entry?.bundle) {
@@ -2884,7 +2892,7 @@ class ManagerBotService {
             await this.replyEphemeral(interaction, "Não achei um pagamento de ativação aprovado para essa assinatura.");
             return;
         }
-        this.rememberAppsPanelInteraction(interaction);
+        this.rememberAppsPanelInteraction(interaction, { page, selectedKey, view: "overview" });
         try {
             this.dependencies.purchaseSetupService.resetSetupSession(payment.id);
             await this.persistStoreIfNeeded();
@@ -2904,7 +2912,7 @@ class ManagerBotService {
             await this.replyEphemeral(interaction, "Não encontrei a aplicação selecionada para renomear.");
             return;
         }
-        this.rememberAppsPanelInteraction(interaction);
+        this.rememberAppsPanelInteraction(interaction, { page, selectedKey, view: "settings" });
         await interaction.showModal(this.buildAppsRenameModal(page, entry));
     }
     async handleAppsTokenButton(interaction) {
@@ -2917,7 +2925,7 @@ class ManagerBotService {
             await this.replyEphemeral(interaction, "Não encontrei a aplicação selecionada para trocar o token.");
             return;
         }
-        this.rememberAppsPanelInteraction(interaction);
+        this.rememberAppsPanelInteraction(interaction, { page, selectedKey, view: "settings" });
         await interaction.showModal(this.buildAppsTokenModal(page, entry));
     }
     async handleAppsOwnerButton(interaction) {
@@ -2930,7 +2938,7 @@ class ManagerBotService {
             await this.replyEphemeral(interaction, "Não encontrei a aplicação selecionada para trocar o dono do bot.");
             return;
         }
-        this.rememberAppsPanelInteraction(interaction);
+        this.rememberAppsPanelInteraction(interaction, { page, selectedKey, view: "settings" });
         await interaction.showModal(this.buildAppsOwnerModal(page, entry));
     }
     async handleAppsTransferButton(interaction) {
@@ -2943,7 +2951,7 @@ class ManagerBotService {
             await this.replyEphemeral(interaction, "Não encontrei a aplicação selecionada para transferir.");
             return;
         }
-        this.rememberAppsPanelInteraction(interaction);
+        this.rememberAppsPanelInteraction(interaction, { page, selectedKey, view: "settings" });
         await interaction.showModal(this.buildAppsTransferModal(page, entry));
     }
     async handleAppsDeleteButton(interaction) {
@@ -2956,7 +2964,7 @@ class ManagerBotService {
             await this.replyEphemeral(interaction, "Não encontrei a aplicação selecionada para deletar.");
             return;
         }
-        this.rememberAppsPanelInteraction(interaction);
+        this.rememberAppsPanelInteraction(interaction, { page, selectedKey, view: "settings" });
         await interaction.showModal(this.buildAppsDeleteModal(page, entry));
     }
     async handleAppsRenameModal(interaction) {
@@ -4105,6 +4113,38 @@ class ManagerBotService {
             .setColor(instance?.status === "running" ? 0x22c55e : instance?.status === "suspended" ? 0xef4444 : 0x2563eb)
             .setTitle("Manager | Suas Aplicações")
             .setDescription(this.limitMessageSize(lines.join("\n\n")));
+        const formatCodeValue = (value) => {
+            const normalized = String(value ?? "--").trim() || "--";
+            return `\`${normalized.replace(/`/g, "'")}\``;
+        };
+        if (instance) {
+            const descriptionLines = [
+                notice ? `**AtualizaÃ§Ã£o**\n${notice}` : null,
+                `**AplicaÃ§Ã£o:** ${entry.displayName} (${bundle.product?.name ?? "Produto"})`,
+            ].filter(Boolean);
+            const expirationLabel = instance.expiresAt
+                ? `${this.formatIsoDate(instance.expiresAt)} (${this.formatRelativeTimestamp(instance.expiresAt)})`
+                : "Aguardando definiÃ§Ã£o";
+            embed
+                .setDescription(this.limitMessageSize(descriptionLines.join("\n\n")))
+                .setFields({ name: "\uD83D\uDFE2 | Status", value: formatCodeValue(metrics.status), inline: false }, { name: "\uD83D\uDDA5\uFE0F | Cpu", value: formatCodeValue(metrics.cpu), inline: true }, { name: "\uD83D\uDCBE | MemÃ³ria Ram", value: formatCodeValue(metrics.ram), inline: true }, { name: "\uD83D\uDDD2\uFE0F | SSD", value: formatCodeValue(metrics.ssd), inline: true }, { name: "\uD83C\uDF10 | Network(Total)", value: formatCodeValue(metrics.networkTotal), inline: true }, { name: "\uD83C\uDF10 | Network(Now)", value: formatCodeValue(metrics.networkNow), inline: true }, { name: "\u23F0 | Uptime", value: formatCodeValue(metrics.uptime), inline: true }, { name: "\uD83D\uDD53 | Expira em", value: formatCodeValue(expirationLabel), inline: false }, { name: "ID", value: formatCodeValue(instance.id), inline: false });
+            if (metrics.error) {
+                embed.addFields({ name: "\u26A0\uFE0F | Aviso da SquareCloud", value: this.limitMessageSize(String(metrics.error)), inline: false });
+            }
+            const normalizedDescriptionLines = [
+                notice ? `**Atualizacao**\n${notice}` : null,
+                `**Aplicacao:** ${entry.displayName} (${bundle.product?.name ?? "Produto"})`,
+            ].filter(Boolean);
+            const normalizedExpirationLabel = instance.expiresAt
+                ? `${this.formatIsoDate(instance.expiresAt)} (${this.formatRelativeTimestamp(instance.expiresAt)})`
+                : "Aguardando definicao";
+            embed
+                .setDescription(this.limitMessageSize(normalizedDescriptionLines.join("\n\n")))
+                .setFields({ name: "\uD83D\uDFE2 | Status", value: formatCodeValue(metrics.status), inline: false }, { name: "\uD83D\uDDA5\uFE0F | Cpu", value: formatCodeValue(metrics.cpu), inline: true }, { name: "\uD83D\uDCBE | Memoria Ram", value: formatCodeValue(metrics.ram), inline: true }, { name: "\uD83D\uDDD2\uFE0F | SSD", value: formatCodeValue(metrics.ssd), inline: true }, { name: "\uD83C\uDF10 | Network(Total)", value: formatCodeValue(metrics.networkTotal), inline: true }, { name: "\uD83C\uDF10 | Network(Now)", value: formatCodeValue(metrics.networkNow), inline: true }, { name: "\u23F0 | Uptime", value: formatCodeValue(metrics.uptime), inline: true }, { name: "\uD83D\uDD53 | Expira em", value: formatCodeValue(normalizedExpirationLabel), inline: false }, { name: "ID", value: formatCodeValue(instance.id), inline: false });
+            if (metrics.error) {
+                embed.addFields({ name: "\u26A0\uFE0F | Aviso da SquareCloud", value: this.limitMessageSize(String(metrics.error)), inline: false });
+            }
+        }
         const imageUrl = String(bundle.product?.panelConfig?.imageUrl ?? "").trim();
         if (isLikelyHttpUrl(imageUrl)) {
             embed.setThumbnail(imageUrl);
@@ -4143,7 +4183,140 @@ class ManagerBotService {
             .setTitle("Configurações da Aplicação")
             .setDescription(this.limitMessageSize(lines.join("\n")));
     }
-    buildAppsOverviewComponents(entry, page) {
+    pickAppsRuntimeStatusValue(overview = null) {
+        const status = overview?.status ?? {};
+        const info = overview?.info ?? {};
+        return this.pickNestedValue(status, [
+            "status",
+            "state",
+            "running",
+            "currentStatus",
+            "container.status",
+            "container.state",
+            "container.running",
+            "usage.status",
+            "usage.state",
+            "usage.running",
+            "stats.status",
+            "stats.state",
+            "stats.running",
+            "response.status",
+            "response.state",
+            "response.running",
+        ]) ??
+            this.pickNestedValue(info, [
+                "status",
+                "state",
+                "running",
+                "currentStatus",
+                "container.status",
+                "container.state",
+                "container.running",
+                "application.status",
+                "application.state",
+                "application.running",
+                "response.status",
+                "response.state",
+                "response.running",
+            ]);
+    }
+    normalizeAppsRuntimeState(rawStatus, instanceStatus = "") {
+        if (typeof rawStatus === "boolean") {
+            return rawStatus ? "running" : "stopped";
+        }
+        if (typeof rawStatus === "number") {
+            return rawStatus > 0 ? "running" : "stopped";
+        }
+        if (typeof rawStatus === "string" && rawStatus.trim()) {
+            const normalized = rawStatus.trim().toLowerCase();
+            if (["running", "online", "started", "ready", "active", "em execucao", "em execução", "rodando"].some((token) => normalized.includes(token))) {
+                return "running";
+            }
+            if (["starting", "deploying", "provisioning", "pending", "inicializando", "provisionando"].some((token) => normalized.includes(token))) {
+                return "starting";
+            }
+            if (["offline", "stopped", "stop", "exited", "exit", "dead", "crashed", "error", "failed", "suspended", "desligada", "desligado"].some((token) => normalized.includes(token))) {
+                return "stopped";
+            }
+        }
+        const normalizedInstanceStatus = String(instanceStatus ?? "").trim().toLowerCase();
+        if (["running", "active"].includes(normalizedInstanceStatus)) {
+            return "running";
+        }
+        if (["provisioning", "starting"].includes(normalizedInstanceStatus)) {
+            return "starting";
+        }
+        if (["stopped", "suspended", "failed", "deleted", "expired", "exited"].includes(normalizedInstanceStatus)) {
+            return "stopped";
+        }
+        return "";
+    }
+    formatAppsPowerStateLabel(powerState) {
+        const state = String(powerState?.state ?? "").trim();
+        const rawStatus = String(powerState?.rawStatus ?? "").trim();
+        const labels = {
+            running: "Em execução",
+            starting: "Inicializando",
+            stopped: "Desligada",
+            unprovisioned: "Não provisionada",
+            unknown: "Status desconhecido",
+        };
+        const label = labels[state] ?? labels.unknown;
+        if (rawStatus && !["true", "false"].includes(rawStatus.toLowerCase())) {
+            const normalizedRaw = rawStatus.toLowerCase();
+            const normalizedLabel = label.toLowerCase();
+            const equivalentStates = {
+                running: ["running", "online", "started", "ready", "active", "em execucao", "em execuÃ§Ã£o", "rodando"],
+                starting: ["starting", "deploying", "provisioning", "pending", "inicializando", "provisionando"],
+                stopped: ["offline", "stopped", "stop", "exited", "exit", "dead", "crashed", "error", "failed", "suspended", "desligada", "desligado"],
+                unprovisioned: ["pending", "unprovisioned", "nao provisionada", "nÃ£o provisionada"],
+            };
+            const hasEquivalentMeaning = (equivalentStates[state] ?? []).some((token) => normalizedRaw.includes(token));
+            if (!hasEquivalentMeaning && !normalizedLabel.includes(normalizedRaw) && !normalizedRaw.includes(normalizedLabel)) {
+                return `${label} (${rawStatus})`;
+            }
+        }
+        return label;
+    }
+    buildSquareCloudBootFailureMessage(boot, fallbackMessage) {
+        const attempts = Array.isArray(boot?.attempts) ? boot.attempts : [];
+        const latestStatusAttempt = [...attempts]
+            .reverse()
+            .find((attempt) => String(attempt?.action ?? "").startsWith("status_check") && attempt?.result);
+        const rawStatus = this.pickAppsRuntimeStatusValue({
+            status: latestStatusAttempt?.result?.response ?? latestStatusAttempt?.result ?? null,
+            info: null,
+        });
+        const latestErrorAttempt = [...attempts].reverse().find((attempt) => attempt?.error);
+        return [
+            fallbackMessage,
+            rawStatus !== undefined && rawStatus !== null && String(rawStatus).trim()
+                ? `Status atual: ${String(rawStatus).trim()}.`
+                : null,
+            latestErrorAttempt?.error ? `Último erro: ${latestErrorAttempt.error}.` : null,
+        ].filter(Boolean).join(" ");
+    }
+    getAppsPowerState(entry, overview = null) {
+        const instance = entry?.instance ?? null;
+        const noHostingApp = !instance?.hostingAppId || String(instance.hostingAppId).startsWith("pending-");
+        if (noHostingApp) {
+            return {
+                canStart: false,
+                canStop: false,
+                state: "unprovisioned",
+                rawStatus: null,
+            };
+        }
+        const rawStatus = this.pickAppsRuntimeStatusValue(overview);
+        const normalizedState = this.normalizeAppsRuntimeState(rawStatus, instance?.status);
+        return {
+            canStart: normalizedState !== "running" && normalizedState !== "starting",
+            canStop: normalizedState !== "stopped",
+            state: normalizedState || "unknown",
+            rawStatus,
+        };
+    }
+    buildAppsOverviewComponents(entry, page, overview = null) {
         if (!entry) {
             return [];
         }
@@ -4160,6 +4333,10 @@ class ManagerBotService {
                     .setStyle(discord_js_1.ButtonStyle.Danger), new discord_js_1.ButtonBuilder()
                     .setCustomId(`${CUSTOM_IDS.appsPowerPrefix}restart:${page}:${entry.key}`)
                     .setLabel("Reiniciar")
+                    .setEmoji("\uD83D\uDD04")
+                    .setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder()
+                    .setCustomId(`${CUSTOM_IDS.appsViewPrefix}overview:${page}:${entry.key}`)
+                    .setLabel("Atualizar")
                     .setEmoji("\uD83D\uDD04")
                     .setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder()
                     .setCustomId(`${CUSTOM_IDS.appsViewPrefix}settings:${page}:${entry.key}`)
@@ -6025,6 +6202,11 @@ class ManagerBotService {
         const now = Date.now();
         for (const [userId, tracked] of this.trackedAppsPanels.entries()) {
             if ((tracked?.createdAt ?? 0) + APPS_PANEL_TRACK_TTL_MS <= now) {
+                const existingTimer = this.trackedAppsPanelRefreshTimers.get(userId);
+                if (existingTimer) {
+                    clearTimeout(existingTimer);
+                    this.trackedAppsPanelRefreshTimers.delete(userId);
+                }
                 this.trackedAppsPanels.delete(userId);
             }
         }
@@ -6042,18 +6224,90 @@ class ManagerBotService {
             messageId: interaction?.message?.id ?? null,
         });
     }
-    rememberAppsPanelInteraction(interaction) {
+    clearTrackedAppsPanelRefreshTimer(userId) {
+        const normalizedUserId = String(userId ?? "").trim();
+        if (!normalizedUserId) {
+            return;
+        }
+        const existingTimer = this.trackedAppsPanelRefreshTimers.get(normalizedUserId);
+        if (existingTimer) {
+            clearTimeout(existingTimer);
+            this.trackedAppsPanelRefreshTimers.delete(normalizedUserId);
+        }
+    }
+    scheduleTrackedAppsPanelRefresh(userId) {
+        const normalizedUserId = String(userId ?? "").trim();
+        if (!normalizedUserId) {
+            return;
+        }
+        this.clearTrackedAppsPanelRefreshTimer(normalizedUserId);
+        const timer = setTimeout(() => {
+            this.trackedAppsPanelRefreshTimers.delete(normalizedUserId);
+            void this.refreshTrackedAppsPanel(normalizedUserId);
+        }, APPS_PANEL_REFRESH_INTERVAL_MS);
+        timer.unref?.();
+        this.trackedAppsPanelRefreshTimers.set(normalizedUserId, timer);
+    }
+    async refreshTrackedAppsPanel(userId) {
+        const normalizedUserId = String(userId ?? "").trim();
+        if (!normalizedUserId) {
+            return false;
+        }
+        this.cleanupTrackedAppsPanels();
+        const tracked = this.trackedAppsPanels.get(normalizedUserId);
+        if (!tracked) {
+            this.clearTrackedAppsPanelRefreshTimer(normalizedUserId);
+            return false;
+        }
+        if (tracked.refreshing) {
+            this.scheduleTrackedAppsPanelRefresh(normalizedUserId);
+            return false;
+        }
+        tracked.refreshing = true;
+        try {
+            const payload = await this.buildAppsPanelPayload(normalizedUserId, tracked.page ?? 0, tracked.selectedKey ?? null, tracked.view === "settings" ? "settings" : "overview");
+            const updated = await this.tryUpdateTrackedAppsPanel(normalizedUserId, payload);
+            if (!updated) {
+                this.trackedAppsPanels.delete(normalizedUserId);
+                this.clearTrackedAppsPanelRefreshTimer(normalizedUserId);
+                return false;
+            }
+            return true;
+        }
+        catch {
+            return false;
+        }
+        finally {
+            const latestTracked = this.trackedAppsPanels.get(normalizedUserId);
+            if (latestTracked) {
+                latestTracked.refreshing = false;
+                this.scheduleTrackedAppsPanelRefresh(normalizedUserId);
+            }
+        }
+    }
+    rememberAppsPanelInteraction(interaction, state = {}) {
         const userId = String(interaction?.user?.id ?? "").trim();
         if (!userId) {
             return;
         }
         this.cleanupTrackedAppsPanels();
+        const previousTracked = this.trackedAppsPanels.get(userId);
+        const normalizedPage = Number.isFinite(Number(state?.page)) ? Math.max(0, Number(state.page) || 0) : Math.max(0, Number(previousTracked?.page ?? 0) || 0);
+        const normalizedSelectedKey = state && Object.prototype.hasOwnProperty.call(state, "selectedKey")
+            ? (state.selectedKey ? String(state.selectedKey).trim() : null)
+            : previousTracked?.selectedKey ?? null;
+        const normalizedView = state?.view === "settings" ? "settings" : state?.view === "overview" ? "overview" : previousTracked?.view === "settings" ? "settings" : "overview";
         this.trackedAppsPanels.set(userId, {
             createdAt: Date.now(),
             sourceInteraction: interaction,
             channelId: interaction?.channelId ?? null,
             messageId: interaction?.message?.id ?? null,
+            page: normalizedPage,
+            selectedKey: normalizedSelectedKey,
+            view: normalizedView,
+            refreshing: false,
         });
+        this.scheduleTrackedAppsPanelRefresh(userId);
     }
     async tryUpdateTrackedAdminPanel(userId, payload) {
         const normalizedUserId = String(userId ?? "").trim();
@@ -6318,37 +6572,140 @@ class ManagerBotService {
         const units = ["B", "KB", "MB", "GB", "TB"];
         const exponent = Math.min(Math.floor(Math.log(numericValue) / Math.log(1024)), units.length - 1);
         const scaled = numericValue / Math.pow(1024, exponent);
-        return `${scaled.toFixed(scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2)}${units[exponent]}`;
+        return `${new Intl.NumberFormat("pt-BR", {
+            minimumFractionDigits: 0,
+            maximumFractionDigits: 2,
+        }).format(scaled)} ${units[exponent]}`;
+    }
+    parseAppsNumericValue(value) {
+        if (typeof value === "number") {
+            return Number.isFinite(value) ? value : null;
+        }
+        if (typeof value !== "string") {
+            return null;
+        }
+        const trimmedValue = value.trim();
+        if (!trimmedValue) {
+            return null;
+        }
+        const match = trimmedValue.match(/-?(?:\d{1,3}(?:[.,]\d{3})+|\d+)(?:[.,]\d+)?/);
+        if (!match) {
+            return null;
+        }
+        const numericChunk = match[0];
+        const lastComma = numericChunk.lastIndexOf(",");
+        const lastDot = numericChunk.lastIndexOf(".");
+        let normalized = numericChunk;
+        if (lastComma >= 0 && lastDot >= 0) {
+            normalized = lastComma > lastDot
+                ? numericChunk.replace(/\./g, "").replace(",", ".")
+                : numericChunk.replace(/,/g, "");
+        }
+        else if (lastComma >= 0) {
+            normalized = numericChunk.replace(",", ".");
+        }
+        const parsed = Number(normalized);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+    convertAppsUnitToBytes(unit = "B") {
+        const normalizedUnit = String(unit ?? "B").trim().toUpperCase();
+        const multiplierMap = {
+            B: 1,
+            KB: 1024,
+            KIB: 1024,
+            MB: 1024 * 1024,
+            MIB: 1024 * 1024,
+            GB: 1024 * 1024 * 1024,
+            GIB: 1024 * 1024 * 1024,
+            TB: 1024 * 1024 * 1024 * 1024,
+            TIB: 1024 * 1024 * 1024 * 1024,
+        };
+        return multiplierMap[normalizedUnit] ?? 1;
+    }
+    parseAppsByteValue(value, fallbackUnit = "B") {
+        if (value === undefined || value === null || value === "") {
+            return null;
+        }
+        if (typeof value === "number") {
+            return Number.isFinite(value) && value >= 0 ? value * this.convertAppsUnitToBytes(fallbackUnit) : null;
+        }
+        if (typeof value !== "string") {
+            return null;
+        }
+        const trimmedValue = value.trim();
+        if (!trimmedValue || /[\u2191\u2193/]/.test(trimmedValue)) {
+            return null;
+        }
+        const match = trimmedValue.match(/(-?(?:\d{1,3}(?:[.,]\d{3})+|\d+)(?:[.,]\d+)?)\s*([kmgt]?i?b)?/i);
+        if (!match) {
+            return null;
+        }
+        const numericValue = this.parseAppsNumericValue(match[1]);
+        if (!Number.isFinite(numericValue) || numericValue < 0) {
+            return null;
+        }
+        return numericValue * this.convertAppsUnitToBytes(match[2] || fallbackUnit);
     }
     formatAppsPercent(value) {
         if (typeof value === "string" && value.trim()) {
+            const numericValue = this.parseAppsNumericValue(value);
+            if (numericValue !== null) {
+                return `${new Intl.NumberFormat("pt-BR", {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                }).format(numericValue)}%`;
+            }
             return value.includes("%") ? value.trim() : `${value.trim()}%`;
         }
         const numericValue = Number(value);
         if (!Number.isFinite(numericValue)) {
-            return "0.00%";
+            return "0,00%";
         }
-        return `${numericValue.toFixed(2)}%`;
+        return `${new Intl.NumberFormat("pt-BR", {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+        }).format(numericValue)}%`;
     }
-    formatAppsUsage(rawValue, usedValue, limitValue) {
-        if (typeof rawValue === "string" && rawValue.trim()) {
-            return rawValue.trim();
-        }
+    formatAppsUsage(rawValue, usedValue, limitValue, options = {}) {
+        const { defaultUnit = "B", totalFallback = null } = options;
         if (rawValue && typeof rawValue === "object") {
             const nestedUsed = this.pickNestedValue(rawValue, ["used", "usage", "current"]);
             const nestedLimit = this.pickNestedValue(rawValue, ["limit", "total", "max"]);
             if (nestedUsed !== undefined || nestedLimit !== undefined) {
-                return `${this.formatHumanBytes(nestedUsed ?? 0)}/${this.formatHumanBytes(nestedLimit ?? 0)}`;
+                usedValue = usedValue ?? nestedUsed;
+                limitValue = limitValue ?? nestedLimit;
             }
         }
-        const usedNumber = Number(usedValue);
-        const limitNumber = Number(limitValue);
-        if (Number.isFinite(usedNumber) && Number.isFinite(limitNumber) && limitNumber > 0) {
-            return `${this.formatHumanBytes(usedNumber)}/${this.formatHumanBytes(limitNumber)}`;
+        if (typeof rawValue === "string" && rawValue.trim()) {
+            const trimmedRaw = rawValue.trim().replace(/\s+/g, " ");
+            if (/[\u2191\u2193/]/.test(trimmedRaw)) {
+                return trimmedRaw;
+            }
         }
-        const rawNumber = Number(rawValue);
-        if (Number.isFinite(rawNumber) && rawNumber > 0) {
-            return this.formatHumanBytes(rawNumber);
+        let usedBytes = this.parseAppsByteValue(usedValue, defaultUnit);
+        let limitBytes = this.parseAppsByteValue(limitValue, defaultUnit);
+        const rawBytes = this.parseAppsByteValue(rawValue, defaultUnit);
+        if (usedBytes === null && rawBytes !== null) {
+            usedBytes = rawBytes;
+        }
+        if ((limitBytes === null || limitBytes <= 0) && totalFallback !== undefined && totalFallback !== null) {
+            const parsedFallback = typeof totalFallback === "number"
+                ? (defaultUnit !== "B" && totalFallback < this.convertAppsUnitToBytes(defaultUnit) * 1024
+                    ? totalFallback * this.convertAppsUnitToBytes(defaultUnit)
+                    : totalFallback)
+                : this.parseAppsByteValue(totalFallback, defaultUnit);
+            if (parsedFallback !== null && Number.isFinite(parsedFallback) && parsedFallback > 0) {
+                limitBytes = parsedFallback;
+            }
+        }
+        if (usedBytes !== null && limitBytes !== null && limitBytes > 0) {
+            return `${this.formatHumanBytes(usedBytes)}/${this.formatHumanBytes(limitBytes)}`;
+        }
+        if (usedBytes !== null) {
+            return this.formatHumanBytes(usedBytes);
+        }
+        if (typeof rawValue === "string" && rawValue.trim()) {
+            return rawValue.trim().replace(/\s+/g, " ");
         }
         return "--";
     }
@@ -6356,7 +6713,11 @@ class ManagerBotService {
         if (typeof value === "string" && value.trim()) {
             const parsedDate = Date.parse(value);
             if (!Number.isNaN(parsedDate)) {
-                return this.formatAppsUptime(Math.max(0, Math.floor((Date.now() - parsedDate) / 1000)));
+                return this.formatAppsUptime(parsedDate);
+            }
+            const parsedNumeric = this.parseAppsNumericValue(value);
+            if (parsedNumeric !== null) {
+                return this.formatAppsUptime(parsedNumeric);
             }
             return value.trim();
         }
@@ -6364,7 +6725,21 @@ class ManagerBotService {
         if (!Number.isFinite(numericValue) || numericValue < 0) {
             return "--";
         }
-        const totalSeconds = numericValue > 1_000_000_000 ? Math.floor(numericValue / 1000) : Math.floor(numericValue);
+        const nowMilliseconds = Date.now();
+        const nowSeconds = Math.floor(nowMilliseconds / 1000);
+        let totalSeconds;
+        if (numericValue > nowMilliseconds * 0.5) {
+            totalSeconds = Math.max(0, Math.floor((nowMilliseconds - numericValue) / 1000));
+        }
+        else if (numericValue > nowSeconds * 0.5) {
+            totalSeconds = Math.max(0, nowSeconds - Math.floor(numericValue));
+        }
+        else if (numericValue > 1_000_000_000) {
+            totalSeconds = Math.floor(numericValue / 1000);
+        }
+        else {
+            totalSeconds = Math.floor(numericValue);
+        }
         const days = Math.floor(totalSeconds / 86400);
         const hours = Math.floor((totalSeconds % 86400) / 3600);
         const minutes = Math.floor((totalSeconds % 3600) / 60);
@@ -6394,8 +6769,14 @@ class ManagerBotService {
         return {
             status: statusLabel,
             cpu: this.formatAppsPercent(this.pickNestedValue(status, ["cpu", "cpuUsage", "usage.cpu", "usage.cpuUsage", "stats.cpu"])),
-            ram: this.formatAppsUsage(this.pickNestedValue(status, ["ram", "memory", "stats.ram", "stats.memory"]), this.pickNestedValue(status, ["ram.used", "memory.used", "usage.ram.used", "usage.memory.used", "stats.ram.used", "stats.memory.used"]), this.pickNestedValue(status, ["ram.total", "ram.limit", "memory.total", "memory.limit", "usage.ram.total", "usage.memory.total", "stats.ram.total", "stats.memory.total"])),
-            ssd: this.formatAppsUsage(this.pickNestedValue(info, ["ssd", "storage", "disk", "stats.ssd", "stats.storage"]), this.pickNestedValue(info, ["ssd.used", "storage.used", "disk.used", "stats.ssd.used"]), this.pickNestedValue(info, ["ssd.total", "ssd.limit", "storage.total", "storage.limit", "disk.total", "disk.limit", "stats.ssd.total"])),
+            ram: this.formatAppsUsage(this.pickNestedValue(status, ["ram", "memory", "stats.ram", "stats.memory"]), this.pickNestedValue(status, ["ram.used", "memory.used", "usage.ram.used", "usage.memory.used", "stats.ram.used", "stats.memory.used"]), this.pickNestedValue(status, ["ram.total", "ram.limit", "memory.total", "memory.limit", "usage.ram.total", "usage.memory.total", "stats.ram.total", "stats.memory.total", "memory.max"]), {
+                defaultUnit: "MB",
+                totalFallback: this.pickNestedValue(info, ["ram", "memory", "memory.total", "memory.limit", "stats.memory.total", "stats.ram.total"]),
+            }),
+            ssd: this.formatAppsUsage(this.pickNestedValue(status, ["storage", "ssd", "disk", "stats.storage", "stats.ssd"]), this.pickNestedValue(status, ["storage.used", "ssd.used", "disk.used", "stats.storage.used", "stats.ssd.used"]), this.pickNestedValue(status, ["storage.total", "storage.limit", "ssd.total", "ssd.limit", "disk.total", "disk.limit", "stats.storage.total", "stats.ssd.total"]), {
+                defaultUnit: "MB",
+                totalFallback: this.pickNestedValue(info, ["storage.total", "storage.limit", "ssd.total", "ssd.limit", "disk.total", "disk.limit", "stats.storage.total", "stats.ssd.total"]) ?? SQUARECLOUD_DEFAULT_STORAGE_BYTES,
+            }),
             networkTotal: this.formatAppsUsage(this.pickNestedValue(status, ["network.total", "networkTotal", "usage.network.total", "stats.network.total"])),
             networkNow: this.formatAppsUsage(this.pickNestedValue(status, ["network.now", "networkNow", "usage.network.now", "stats.network.now"])),
             uptime: this.formatAppsUptime(this.pickNestedValue(status, ["uptime", "uptimeSeconds", "stats.uptime", "runningFor"]) ??
