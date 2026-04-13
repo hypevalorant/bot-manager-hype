@@ -129,6 +129,48 @@ function Write-DeployDotEnv {
   [System.IO.File]::WriteAllLines($envPath, $lines, [System.Text.Encoding]::UTF8)
 }
 
+function Copy-RuntimeArtifactsForDeploy {
+  param(
+    [string]$WorkspaceRoot,
+    [string]$StageDir,
+    [hashtable]$EnvValues
+  )
+
+  $sourceRoot = Join-Path $WorkspaceRoot "runtime-artifacts"
+  if (-not (Test-Path -LiteralPath $sourceRoot)) {
+    return
+  }
+
+  $targetRoot = Join-Path $StageDir "runtime-artifacts"
+  New-Item -ItemType Directory -Path $targetRoot -Force | Out-Null
+
+  $readmePath = Join-Path $sourceRoot "README.md"
+  if (Test-Path -LiteralPath $readmePath) {
+    Copy-Item -LiteralPath $readmePath -Destination (Join-Path $targetRoot "README.md") -Force
+  }
+
+  $generatedSourceDir = Join-Path $sourceRoot "generated"
+  if (-not (Test-Path -LiteralPath $generatedSourceDir)) {
+    return
+  }
+
+  $generatedTargetDir = Join-Path $targetRoot "generated"
+  New-Item -ItemType Directory -Path $generatedTargetDir -Force | Out-Null
+
+  $instanceScopedArtifactPattern = '-[0-9a-f]{8}_[0-9a-f]{4}_[0-9a-f]{4}_[0-9a-f]{4}_[0-9a-f]{12}\.zip$'
+  $artifactFiles = Get-ChildItem -LiteralPath $generatedSourceDir -File | Where-Object {
+    $_.Name -notmatch $instanceScopedArtifactPattern
+  }
+
+  foreach ($artifactFile in $artifactFiles) {
+    if ($artifactFile.Name -ieq "bot-ticket-hype.zip" -and $EnvValues.ContainsKey("SOURCE_GITHUB_REPO_BOT_TICKET_HYPE")) {
+      continue
+    }
+
+    Copy-Item -LiteralPath $artifactFile.FullName -Destination (Join-Path $generatedTargetDir $artifactFile.Name) -Force
+  }
+}
+
 $prepareScript = Join-Path $workspaceRoot "scripts\prepare-production-artifacts.js"
 if (Test-Path -LiteralPath $prepareScript) {
   node $prepareScript
@@ -153,6 +195,8 @@ if (Test-Path -LiteralPath $stageDir) {
 New-Item -ItemType Directory -Path $stageDir | Out-Null
 
 try {
+  $envValues = Get-DotEnvMap (Join-Path $workspaceRoot ".env")
+
   $items = @(
     "dist",
     "data",
@@ -168,11 +212,15 @@ try {
   }
 
   foreach ($item in $items) {
+    if ($item -eq "runtime-artifacts") {
+      Copy-RuntimeArtifactsForDeploy -WorkspaceRoot $workspaceRoot -StageDir $stageDir -EnvValues $envValues
+      continue
+    }
+
     $destination = Join-Path $stageDir (Split-Path -Path $item -Leaf)
     Copy-Item -LiteralPath $item -Destination $destination -Recurse -Force
   }
 
-  $envValues = Get-DotEnvMap (Join-Path $workspaceRoot ".env")
   $copiedFileMap = @{
     "EFI_CERT_P12_PATH" = Add-OptionalDeployFile -EnvValues $envValues -SourcePathKey "EFI_CERT_P12_PATH" -DeployFileNameKey "EFI_CERT_P12_DEPLOY_FILENAME" -DefaultDeployFileName "efi-cert.p12" -Label "Certificado EFI" -StageDir $stageDir
     "EFI_CA_PATH" = Add-OptionalDeployFile -EnvValues $envValues -SourcePathKey "EFI_CA_PATH" -DeployFileNameKey "EFI_CA_DEPLOY_FILENAME" -DefaultDeployFileName "" -Label "Arquivo CA da EFI" -StageDir $stageDir
