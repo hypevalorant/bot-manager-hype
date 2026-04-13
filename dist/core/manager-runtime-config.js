@@ -148,6 +148,53 @@ function normalizeRelativePathList(values) {
             .map((value) => String(value ?? "").trim().replaceAll("\\", "/").replace(/^[./]+/u, "").replace(/^\/+|\/+$/g, ""))
             .filter(Boolean))];
 }
+function normalizeSourceMemory(value) {
+    const normalized = String(value ?? "").trim();
+    if (!/^\d+$/u.test(normalized)) {
+        return null;
+    }
+    const parsed = Number.parseInt(normalized, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+        return null;
+    }
+    return String(parsed);
+}
+function getSourceMemoryCap(sourceSlug, defaultSourceConfig = {}) {
+    const envKeyPart = (0, utils_js_1.normalizeEnvKeyPart)(sourceSlug);
+    return normalizeSourceMemory(readEnvValue(`SOURCE_MEMORY_${envKeyPart}`) ?? defaultSourceConfig?.memory ?? (sourceSlug === "bot-ticket-hype" ? "256" : null));
+}
+function normalizeRuntimeSourceConfigEntry(sourceSlug, defaultSourceConfig = {}, currentSourceConfig = {}) {
+    const merged = {
+        ...(defaultSourceConfig && typeof defaultSourceConfig === "object" ? defaultSourceConfig : {}),
+        ...(currentSourceConfig && typeof currentSourceConfig === "object" ? currentSourceConfig : {}),
+    };
+    const sourceMemoryCap = getSourceMemoryCap(sourceSlug, defaultSourceConfig);
+    const configuredMemory = normalizeSourceMemory(currentSourceConfig?.memory);
+    if (sourceSlug === "bot-ticket-hype") {
+        merged.memory = sourceMemoryCap ?? configuredMemory ?? null;
+        if (configuredMemory && sourceMemoryCap && Number.parseInt(configuredMemory, 10) <= Number.parseInt(sourceMemoryCap, 10)) {
+            merged.memory = configuredMemory;
+        }
+    }
+    else if (configuredMemory) {
+        merged.memory = configuredMemory;
+    }
+    else if (sourceMemoryCap) {
+        merged.memory = sourceMemoryCap;
+    }
+    if (!merged.memory) {
+        delete merged.memory;
+    }
+    return merged;
+}
+function mergeRuntimeSourceConfigs(defaultSources, currentSources) {
+    const defaultEntries = defaultSources && typeof defaultSources === "object" ? defaultSources : {};
+    const currentEntries = currentSources && typeof currentSources === "object" ? currentSources : {};
+    return Object.fromEntries([...new Set([
+            ...Object.keys(defaultEntries),
+            ...Object.keys(currentEntries),
+        ])].map((sourceSlug) => [sourceSlug, normalizeRuntimeSourceConfigEntry(sourceSlug, defaultEntries[sourceSlug], currentEntries[sourceSlug])]));
+}
 class ManagerRuntimeConfigService {
     store;
     efipayClient = null;
@@ -195,10 +242,7 @@ class ManagerRuntimeConfigService {
                 cartChannelNameTemplate: normalizeOptionalString(sales.cartChannelNameTemplate) ?? defaults.sales.cartChannelNameTemplate,
                 autoAssignCustomerRole: normalizeOptionalBoolean(sales.autoAssignCustomerRole) ?? defaults.sales.autoAssignCustomerRole,
             },
-            sources: {
-                ...(defaults.sources && typeof defaults.sources === "object" ? defaults.sources : {}),
-                ...sources,
-            },
+            sources: mergeRuntimeSourceConfigs(defaults.sources, sources),
             billing: {
                 ...defaults.billing,
                 ...billing,
@@ -380,7 +424,8 @@ class ManagerRuntimeConfigService {
         if (input.excludePaths !== undefined) {
             next.excludePaths = normalizeRelativePathList(input.excludePaths);
         }
-        runtimeState.sources[normalizedSlug] = next;
+        const defaultSourceConfig = (0, store_js_1.createEmptyManagerRuntimeConfig)().sources?.[normalizedSlug] ?? {};
+        runtimeState.sources[normalizedSlug] = normalizeRuntimeSourceConfigEntry(normalizedSlug, defaultSourceConfig, next);
         runtimeState.updatedAt = (0, utils_js_1.nowIso)();
         return this.getRuntimeSourceConfig(normalizedSlug);
     }
