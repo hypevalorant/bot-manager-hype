@@ -228,6 +228,25 @@ class PersistentStore {
         const existingEfipay = existingBilling.efipay && typeof existingBilling.efipay === "object"
             ? existingBilling.efipay
             : {};
+        const mergedSources = Object.fromEntries(Object.entries({
+            ...(defaults.sources && typeof defaults.sources === "object" ? defaults.sources : {}),
+            ...existingSources,
+        }).map(([slug, config]) => {
+            const defaultSourceConfig = defaults.sources?.[slug] && typeof defaults.sources[slug] === "object"
+                ? defaults.sources[slug]
+                : {};
+            const currentSourceConfig = config && typeof config === "object" ? config : {};
+            const mergedSourceConfig = {
+                ...defaultSourceConfig,
+                ...currentSourceConfig,
+            };
+            const defaultMemory = String(defaultSourceConfig.memory ?? "").trim();
+            const currentMemory = String(currentSourceConfig.memory ?? "").trim();
+            if ((!currentMemory || (slug === "bot-ticket-hype" && currentMemory === "512" && defaultMemory === "256")) && defaultMemory) {
+                mergedSourceConfig.memory = defaultMemory;
+            }
+            return [slug, mergedSourceConfig];
+        }));
         return {
             ...defaults,
             ...current,
@@ -238,7 +257,7 @@ class PersistentStore {
                 staffUserIds: Array.isArray(existingAccess.staffUserIds) ? existingAccess.staffUserIds : [],
                 staffRoleIds: Array.isArray(existingAccess.staffRoleIds) ? existingAccess.staffRoleIds : [],
             },
-            sources: existingSources,
+            sources: mergedSources,
             billing: {
                 ...defaults.billing,
                 ...existingBilling,

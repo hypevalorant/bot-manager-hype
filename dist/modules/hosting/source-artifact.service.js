@@ -9,6 +9,9 @@ const yazl_1 = require("yazl");
 const utils_js_1 = require("../../core/utils.js");
 const managed_runtime_wrapper_js_1 = require("./managed-runtime-wrapper.js");
 const AdmZip = typeof adm_zip_1 === "function" ? adm_zip_1 : adm_zip_1.default;
+const SOURCE_DEFAULT_MEMORY_BY_SLUG = Object.freeze({
+    "bot-ticket-hype": "256",
+});
 const EXCLUDED_DIR_NAMES = new Set([
     ".git",
     ".github",
@@ -39,6 +42,7 @@ class SourceArtifactService {
     getRuntimeOptions(sourceSlug, overrides = {}) {
         const envKeyPart = (0, utils_js_1.normalizeEnvKeyPart)(sourceSlug);
         const runtimeSourceConfig = this.getRuntimeSourceConfig(sourceSlug) ?? {};
+        const defaultMemory = this.getDefaultMemoryForSource(sourceSlug, envKeyPart);
         return {
             entrypoint: runtimeSourceConfig.entrypoint ?? this.readEnvValue(`SOURCE_ENTRYPOINT_${envKeyPart}`),
             displayName: overrides.displayName ??
@@ -49,7 +53,7 @@ class SourceArtifactService {
                 runtimeSourceConfig.description ??
                 this.readEnvValue(`SOURCE_DESCRIPTION_${envKeyPart}`) ??
                 `Runtime gerenciado para ${sourceSlug}`,
-            memory: runtimeSourceConfig.memory ?? this.readEnvValue(`SOURCE_MEMORY_${envKeyPart}`) ?? "256",
+            memory: this.resolveRuntimeMemory(sourceSlug, runtimeSourceConfig.memory, defaultMemory),
             appPublicUrl: runtimeSourceConfig.appPublicUrl ??
                 this.readEnvValue(`SOURCE_APP_PUBLIC_URL_${envKeyPart}`) ??
                 this.readEnvValue("APP_BASE_URL"),
@@ -427,6 +431,31 @@ class SourceArtifactService {
             token,
             sourceLabel: `${repo}@${ref}`,
         };
+    }
+    getDefaultMemoryForSource(sourceSlug, envKeyPart = (0, utils_js_1.normalizeEnvKeyPart)(sourceSlug)) {
+        return this.normalizeMemoryValue(this.readEnvValue(`SOURCE_MEMORY_${envKeyPart}`) ?? SOURCE_DEFAULT_MEMORY_BY_SLUG[sourceSlug] ?? "256") ?? "256";
+    }
+    normalizeMemoryValue(value) {
+        const normalizedValue = String(value ?? "").trim();
+        if (!/^\d+$/u.test(normalizedValue)) {
+            return null;
+        }
+        const parsedValue = Number.parseInt(normalizedValue, 10);
+        if (!Number.isFinite(parsedValue) || parsedValue <= 0) {
+            return null;
+        }
+        return String(parsedValue);
+    }
+    resolveRuntimeMemory(sourceSlug, configuredValue, defaultMemory) {
+        const normalizedDefault = this.normalizeMemoryValue(defaultMemory) ?? "256";
+        const normalizedConfigured = this.normalizeMemoryValue(configuredValue);
+        if (!normalizedConfigured) {
+            return normalizedDefault;
+        }
+        if (sourceSlug === "bot-ticket-hype" && Number.parseInt(normalizedConfigured, 10) > Number.parseInt(normalizedDefault, 10)) {
+            return normalizedDefault;
+        }
+        return normalizedConfigured;
     }
     readEnvValue(envKey) {
         const value = String(process.env[envKey] ?? "").trim();
