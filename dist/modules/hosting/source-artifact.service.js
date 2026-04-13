@@ -49,7 +49,7 @@ class SourceArtifactService {
                 runtimeSourceConfig.description ??
                 this.readEnvValue(`SOURCE_DESCRIPTION_${envKeyPart}`) ??
                 `Runtime gerenciado para ${sourceSlug}`,
-            memory: runtimeSourceConfig.memory ?? this.readEnvValue(`SOURCE_MEMORY_${envKeyPart}`) ?? "512",
+            memory: runtimeSourceConfig.memory ?? this.readEnvValue(`SOURCE_MEMORY_${envKeyPart}`) ?? "256",
             appPublicUrl: runtimeSourceConfig.appPublicUrl ??
                 this.readEnvValue(`SOURCE_APP_PUBLIC_URL_${envKeyPart}`) ??
                 this.readEnvValue("APP_BASE_URL"),

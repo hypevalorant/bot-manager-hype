@@ -40,6 +40,7 @@ function createEmptyManagerRuntimeConfig() {
             "bot-ticket-hype": {
                 githubRepo: process.env.SOURCE_GITHUB_REPO_BOT_TICKET_HYPE ?? "hypevalorant/bot-ticket-hype",
                 githubRef: process.env.SOURCE_GITHUB_REF_BOT_TICKET_HYPE ?? "main",
+                memory: process.env.SOURCE_MEMORY_BOT_TICKET_HYPE ?? "256",
                 excludePaths: ["data", "transcripts"],
             },
         },
