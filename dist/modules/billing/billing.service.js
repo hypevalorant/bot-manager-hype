@@ -2,6 +2,67 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.BillingService = void 0;
 const utils_js_1 = require("../../core/utils.js");
+function normalizePayerDocumentDigits(value) {
+    return String(value ?? "").replace(/\D/gu, "").trim().slice(0, 18);
+}
+function maskPayerDocumentForDisplay(value) {
+    const digits = normalizePayerDocumentDigits(value);
+    if (digits.length === 11) {
+        return digits.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/u, "$1.$2.$3-$4");
+    }
+    if (digits.length === 14) {
+        return digits.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/u, "$1.$2.$3/$4-$5");
+    }
+    return digits;
+}
+function mergePayerIdentity(base = {}, next = {}) {
+    return {
+        name: String(base.name ?? "").trim() || String(next.name ?? "").trim(),
+        document: normalizePayerDocumentDigits(base.document) || normalizePayerDocumentDigits(next.document),
+    };
+}
+function findEfipayPayerIdentity(payload, depth = 0) {
+    if (!payload || depth > 6) {
+        return { name: "", document: "" };
+    }
+    if (Array.isArray(payload)) {
+        let bestMatch = { name: "", document: "" };
+        for (const item of payload) {
+            bestMatch = mergePayerIdentity(bestMatch, findEfipayPayerIdentity(item, depth + 1));
+            if (bestMatch.name && bestMatch.document) {
+                return bestMatch;
+            }
+        }
+        return bestMatch;
+    }
+    if (typeof payload !== "object") {
+        return { name: "", document: "" };
+    }
+    const current = {
+        name: String(payload.nome ?? payload.name ?? payload.razaoSocial ?? payload.nomeFantasia ?? "").trim(),
+        document: normalizePayerDocumentDigits(payload.cpf ?? payload.cnpj ?? payload.documento ?? payload.document ?? payload.doc ?? ""),
+    };
+    let bestMatch = current;
+    for (const preferredKey of ["gnExtras", "pagador", "dadosPagador", "infoPagador", "pagadorInfo", "identidadePagador", "payer", "devedor", "cliente", "customer"]) {
+        if (!payload[preferredKey]) {
+            continue;
+        }
+        bestMatch = mergePayerIdentity(bestMatch, findEfipayPayerIdentity(payload[preferredKey], depth + 1));
+        if (bestMatch.name && bestMatch.document) {
+            return bestMatch;
+        }
+    }
+    for (const value of Object.values(payload)) {
+        if (!value || (typeof value !== "object" && !Array.isArray(value))) {
+            continue;
+        }
+        bestMatch = mergePayerIdentity(bestMatch, findEfipayPayerIdentity(value, depth + 1));
+        if (bestMatch.name && bestMatch.document) {
+            return bestMatch;
+        }
+    }
+    return bestMatch;
+}
 class BillingService {
     store;
     catalogService;
@@ -286,13 +347,45 @@ class BillingService {
     validateEfipayWebhookHmac(rawValue) {
         return this.efipayClient.validateWebhookHmac(rawValue);
     }
+    applyApprovedEfipayChargeMetadata(payment, charge) {
+        const paidPixEntry = Array.isArray(charge?.pix)
+            ? charge.pix.find((item) => item && typeof item === "object") ?? null
+            : null;
+        const paidAtRaw = String(paidPixEntry?.horario ?? paidPixEntry?.horarioPagamento ?? "").trim();
+        if (paidAtRaw && !Number.isNaN(Date.parse(paidAtRaw))) {
+            payment.paidAt = new Date(paidAtRaw).toISOString();
+        }
+        const payerIdentity = findEfipayPayerIdentity(paidPixEntry ?? charge);
+        const endToEndId = String(paidPixEntry?.endToEndId ?? paidPixEntry?.e2eid ?? "").trim();
+        const checkout = payment.checkoutSessionId
+            ? this.store.checkoutSessions.find((item) => item.id === payment.checkoutSessionId) ?? null
+            : null;
+        for (const target of [payment, checkout].filter(Boolean)) {
+            if (!target.metadata || typeof target.metadata !== "object") {
+                target.metadata = {};
+            }
+            if (endToEndId) {
+                target.metadata.endToEndId = endToEndId;
+            }
+            if (payerIdentity.name) {
+                target.metadata.payerName = payerIdentity.name;
+            }
+            if (payerIdentity.document) {
+                target.metadata.payerDocument = payerIdentity.document;
+                target.metadata.payerDocumentMasked = maskPayerDocumentForDisplay(payerIdentity.document);
+            }
+        }
+    }
     async approveEfipayPixPayment(payment, charge) {
+        payment.providerStatus = String(charge.status ?? payment.providerStatus ?? "CONCLUIDA");
+        this.applyApprovedEfipayChargeMetadata(payment, charge);
         if (payment.status === "approved") {
+            payment.paidAt = payment.paidAt ?? (0, utils_js_1.nowIso)();
+            payment.lastCheckedAt = (0, utils_js_1.nowIso)();
             return this.subscriptionService.getById(payment.subscriptionId);
         }
         payment.status = "approved";
-        payment.providerStatus = String(charge.status ?? "CONCLUIDA");
-        payment.paidAt = (0, utils_js_1.nowIso)();
+        payment.paidAt = payment.paidAt ?? (0, utils_js_1.nowIso)();
         payment.lastCheckedAt = payment.paidAt;
         if (payment.purpose === "renewal") {
             const quantity = Number(payment.metadata.quantity ?? 1);

@@ -370,6 +370,7 @@ async function registerRoutes(app, services) {
         try {
             enforceAdmin(request);
             const result = await services.billingService.approveMockPayment(body.subscriptionId);
+            await syncApprovedPaymentResultToManager(result.payment.id, result, services);
             return reply.send({
                 payment: (0, serializers_js_1.sanitizePaymentRecord)(result.payment),
                 activation: (0, serializers_js_1.sanitizeActivationResult)(result.activation),

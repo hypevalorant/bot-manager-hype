@@ -37,6 +37,21 @@ function isPublicUrl(urlValue) {
         return false;
     }
 }
+function collectWebhookCandidates(payload) {
+    const parsed = payload && typeof payload === "object" ? payload : {};
+    const directCandidates = [];
+    for (const source of [parsed, parsed.data]) {
+        if (!source || typeof source !== "object") {
+            continue;
+        }
+        if (source.txid || source.endToEndId || source.e2eid || (Array.isArray(source.e2eids) && source.e2eids.length > 0)) {
+            directCandidates.push(source);
+        }
+    }
+    const pixItems = Array.isArray(parsed.pix) ? parsed.pix : [];
+    const nestedPixItems = Array.isArray(parsed.data?.pix) ? parsed.data.pix : [];
+    return [...pixItems, ...nestedPixItems, ...directCandidates].filter((item) => item && typeof item === "object");
+}
 class EfipayClient {
     clientId;
     clientSecret;
@@ -323,8 +338,9 @@ class EfipayClient {
     async resolveWebhookTxids(payload) {
         const parsed = (payload ?? {});
         const txids = new Set();
-        for (const item of parsed.pix ?? []) {
-            const txid = String(item?.txid ?? "").trim();
+        const candidates = collectWebhookCandidates(parsed);
+        for (const item of candidates) {
+            const txid = String(item?.txid ?? parsed?.txid ?? parsed?.data?.txid ?? "").trim();
             if (txid) {
                 txids.add(txid);
             }
@@ -332,12 +348,27 @@ class EfipayClient {
         if (txids.size > 0) {
             return [...txids];
         }
+        const endToEndIds = new Set();
         for (const endToEndId of parsed.e2eids ?? []) {
             const normalized = String(endToEndId ?? "").trim();
-            if (!normalized) {
-                continue;
+            if (normalized) {
+                endToEndIds.add(normalized);
             }
-            const pix = await this.getPixByEndToEndId(normalized);
+        }
+        for (const endToEndId of parsed?.data?.e2eids ?? []) {
+            const normalized = String(endToEndId ?? "").trim();
+            if (normalized) {
+                endToEndIds.add(normalized);
+            }
+        }
+        for (const item of candidates) {
+            const normalized = String(item?.endToEndId ?? item?.e2eid ?? "").trim();
+            if (normalized) {
+                endToEndIds.add(normalized);
+            }
+        }
+        for (const endToEndId of endToEndIds) {
+            const pix = await this.getPixByEndToEndId(String(endToEndId ?? "").trim());
             const txid = String(pix?.txid ?? "").trim();
             if (txid) {
                 txids.add(txid);

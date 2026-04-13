@@ -2431,6 +2431,7 @@ class ManagerBotService {
         try {
             const result = await this.dependencies.billingService.approvePaymentManually(paymentId);
             await this.persistStoreIfNeeded();
+            await this.syncApprovedPaymentToCart(result.payment.id).catch(() => null);
             const activation = result.activation;
             const summary = [
                 result.alreadyApproved ? "Esse pagamento ja estava aprovado." : "Pagamento aprovado manualmente.",
@@ -2812,9 +2813,23 @@ class ManagerBotService {
             await this.replyEphemeral(interaction, this.buildAppsAccessDeniedMessage());
             return;
         }
-        const nextPanel = await this.buildAppsPanelViewPayload(context.panelOwnerUserId, context.state.page, context.entry.key, requestedView, context.entry);
-        this.rememberAppsPanelInteraction(interaction, { page: context.state.page, selectedKey: context.entry.key, view: nextPanel.view, panelOwnerUserId: context.panelOwnerUserId, messageId: interaction.message?.id ?? null, channelId: interaction.channelId ?? null });
-        await interaction.update(nextPanel.payload).catch(() => null);
+        await interaction.update(this.buildAppsLoadingPayload()).catch(async () => {
+            await interaction.deferUpdate().catch(() => null);
+        });
+        try {
+            const nextPanel = await this.buildAppsPanelViewPayload(context.panelOwnerUserId, context.state.page, context.entry.key, requestedView, context.entry);
+            this.rememberAppsPanelInteraction(interaction, { page: context.state.page, selectedKey: context.entry.key, view: nextPanel.view, panelOwnerUserId: context.panelOwnerUserId, messageId: interaction.message?.id ?? null, channelId: interaction.channelId ?? null });
+            await interaction.editReply(nextPanel.payload).catch(async () => {
+                await interaction.message?.edit(nextPanel.payload).catch(() => null);
+            });
+        }
+        catch (error) {
+            const failurePayload = await this.buildAppsPanelPayload(context.panelOwnerUserId, context.state.page, context.entry.key, "overview", `Nao consegui carregar essa aplicacao agora: ${error?.message ?? "erro desconhecido"}`);
+            this.rememberAppsPanelInteraction(interaction, { page: context.state.page, selectedKey: context.entry.key, view: "overview", panelOwnerUserId: context.panelOwnerUserId, messageId: interaction.message?.id ?? null, channelId: interaction.channelId ?? null });
+            await interaction.editReply(failurePayload).catch(async () => {
+                await interaction.message?.edit(failurePayload).catch(() => null);
+            });
+        }
     }
     async handleAppsPageButton(interaction) {
         const payload = String(interaction.customId.slice(CUSTOM_IDS.appsPagePrefix.length) ?? "").trim();
@@ -4290,6 +4305,7 @@ class ManagerBotService {
         const entries = this.buildOwnedAppEntries(userId);
         if (entries.length === 0) {
             return {
+                content: "",
                 embeds: [
                     new discord_js_1.EmbedBuilder()
                         .setColor(0xdc2626)
@@ -4316,6 +4332,7 @@ class ManagerBotService {
         const selectRow = this.buildAppsSelectRow(state.pageEntries, state.page, currentView, selectedEntry?.key ?? "");
         const paginationRow = this.buildAppsPaginationRow(state.page, state.pageCount, selectedEntry?.key ?? "", currentView);
         return {
+            content: "",
             embeds: [embed],
             components: [...actionRows, selectRow, paginationRow].filter(Boolean),
         };
@@ -4410,6 +4427,10 @@ class ManagerBotService {
             const normalized = String(value ?? "--").trim() || "--";
             return `\`${normalized.replace(/`/g, "'")}\``;
         };
+        const formatPlainValue = (value, fallback = "--") => {
+            const normalized = String(value ?? "").trim();
+            return normalized || fallback;
+        };
         if (instance) {
             const descriptionLines = [
                 notice ? `**AtualizaÃ§Ã£o**\n${notice}` : null,
@@ -4433,7 +4454,7 @@ class ManagerBotService {
                 : "Aguardando definicao";
             embed
                 .setDescription(this.limitMessageSize(normalizedDescriptionLines.join("\n\n")))
-                .setFields({ name: "\uD83D\uDFE2 | Status", value: formatCodeValue(metrics.status), inline: false }, { name: "\uD83D\uDDA5\uFE0F | Cpu", value: formatCodeValue(metrics.cpu), inline: true }, { name: "\uD83D\uDCBE | Memoria Ram", value: formatCodeValue(metrics.ram), inline: true }, { name: "\uD83D\uDDD2\uFE0F | SSD", value: formatCodeValue(metrics.ssd), inline: true }, { name: "\uD83C\uDF10 | Network(Total)", value: formatCodeValue(metrics.networkTotal), inline: true }, { name: "\uD83C\uDF10 | Network(Now)", value: formatCodeValue(metrics.networkNow), inline: true }, { name: "\u23F0 | Uptime", value: formatCodeValue(metrics.uptime), inline: true }, { name: "\uD83D\uDD53 | Expira em", value: formatCodeValue(normalizedExpirationLabel), inline: false }, { name: "ID", value: formatCodeValue(instance.id), inline: false });
+                .setFields({ name: "\uD83D\uDFE2 | Status", value: formatCodeValue(metrics.status), inline: false }, { name: "\uD83D\uDDA5\uFE0F | Cpu", value: formatCodeValue(metrics.cpu), inline: true }, { name: "\uD83D\uDCBE | Memoria Ram", value: formatCodeValue(metrics.ram), inline: true }, { name: "\uD83D\uDDD2\uFE0F | SSD", value: formatCodeValue(metrics.ssd), inline: true }, { name: "\uD83C\uDF10 | Network(Total)", value: formatCodeValue(metrics.networkTotal), inline: true }, { name: "\uD83C\uDF10 | Network(Now)", value: formatCodeValue(metrics.networkNow), inline: true }, { name: "\u23F0 | Uptime", value: formatPlainValue(metrics.uptime), inline: true }, { name: "\uD83D\uDD53 | Expira em", value: formatPlainValue(normalizedExpirationLabel), inline: false }, { name: "ID", value: formatCodeValue(instance.id), inline: false });
             if (metrics.error) {
                 embed.addFields({ name: "\u26A0\uFE0F | Aviso da SquareCloud", value: this.limitMessageSize(String(metrics.error)), inline: false });
             }
@@ -5732,6 +5753,7 @@ class ManagerBotService {
             return false;
         }
         const approvedAt = Math.max(1, Date.parse(String(bundle.payment.paidAt ?? "")) || Date.now());
+        const ownerUserId = this.getPaymentOwnerDiscordUserId(bundle);
         const tracking = await this.resolveCartTrackingForBundle(bundle);
         const channelId = String(tracking.channelId ?? "").trim() || null;
         const messageId = String(tracking.messageId ?? "").trim() || null;
@@ -5751,12 +5773,14 @@ class ManagerBotService {
             const message = tracking.message ?? await channel.messages.fetch(messageId).catch(() => null);
             if (message?.editable) {
                 await message.edit(payload).catch(() => null);
+                await this.cleanupRecentCartQrMessages(channel, ownerUserId).catch(() => null);
                 await this.markCartChannelApproved(channel, approvedAt);
                 this.scheduleCartApprovedClosure(channel, approvedAt);
                 return true;
             }
         }
         await channel.send(payload).catch(() => null);
+        await this.cleanupRecentCartQrMessages(channel, ownerUserId).catch(() => null);
         await this.markCartChannelApproved(channel, approvedAt);
         this.scheduleCartApprovedClosure(channel, approvedAt);
         return true;
@@ -6169,21 +6193,29 @@ class ManagerBotService {
             return;
         }
         this.clearCartRuntimeState(channelId);
+        let deleted = false;
         if (fetchedChannel.deletable) {
-            await fetchedChannel.delete("Carrinho fechado 5 minutos apos o pagamento aprovado.").catch(() => null);
+            deleted = await fetchedChannel.delete("Carrinho fechado 5 minutos apos o pagamento aprovado.").then(() => true).catch(() => false);
+        }
+        if (deleted) {
             return;
         }
         const latestMessages = await fetchedChannel.messages.fetch({ limit: 5 }).catch(() => null);
         const ownerUserId = String(parseDelimitedTopicValue(fetchedChannel.topic, "user") ?? "").trim();
         const productSlug = String(parseDelimitedTopicValue(fetchedChannel.topic, "product") ?? "").trim();
+        await this.cleanupRecentCartQrMessages(fetchedChannel, ownerUserId).catch(() => null);
         const cartMessage = productSlug ? this.findCartMessage(latestMessages, ownerUserId, productSlug) : null;
-        await cartMessage?.edit({
+        const closePayload = {
             content: "Carrinho encerrado automaticamente 5 minuto(s) apos o pagamento aprovado.",
             embeds: [],
             components: [],
             attachments: [],
             files: [],
-        }).catch(() => null);
+        };
+        const edited = await cartMessage?.edit(closePayload).then(() => true).catch(() => false);
+        if (!edited && typeof fetchedChannel.send === "function") {
+            await fetchedChannel.send(closePayload.content).catch(() => null);
+        }
     }
     async handleCartInactivityTimeout(channelId, scheduledAt) {
         const cached = this.cartStateCache.get(channelId);
@@ -6215,17 +6247,25 @@ class ManagerBotService {
             });
         }
         this.clearCartRuntimeState(channelId);
+        let deleted = false;
         if (fetchedChannel.deletable) {
-            await fetchedChannel.delete("Carrinho fechado por inatividade.").catch(() => null);
+            deleted = await fetchedChannel.delete("Carrinho fechado por inatividade.").then(() => true).catch(() => false);
+        }
+        if (deleted) {
             return;
         }
         const latestMessages = await fetchedChannel.messages.fetch({ limit: 5 }).catch(() => null);
+        await this.cleanupRecentCartQrMessages(fetchedChannel, ownerUserId).catch(() => null);
         const cartMessage = product ? this.findCartMessage(latestMessages, ownerUserId, product.slug) : null;
-        await cartMessage?.edit({
+        const closePayload = {
             content: `Carrinho fechado automaticamente por inatividade apos ${Math.max(1, Number(this.dependencies.managerRuntimeConfigService.getResolvedSalesSettings().cartInactivityMinutes ?? 5))} minuto(s).`,
             embeds: [],
             components: [],
-        }).catch(() => null);
+        };
+        const edited = await cartMessage?.edit(closePayload).then(() => true).catch(() => false);
+        if (!edited && typeof fetchedChannel.send === "function") {
+            await fetchedChannel.send(closePayload.content).catch(() => null);
+        }
     }
     async rehydrateExistingCartTimers() {
         if (!this.client) {
@@ -6357,6 +6397,55 @@ class ManagerBotService {
         ];
         return existingMessages?.find((message) => message.author?.id === this.client?.user?.id &&
             message.components?.some((row) => row.components?.some((component) => expectedFragments.some((fragment) => String(component.customId ?? "").startsWith(fragment))))) ?? null;
+    }
+    isCartQrCodeMessage(message, ownerUserId = null) {
+        if (!message || message.author?.id !== this.client?.user?.id) {
+            return false;
+        }
+        const title = String(message.embeds?.[0]?.title ?? "").trim().toUpperCase();
+        if (title !== "QR CODE GERADO COM SUCESSO:") {
+            return false;
+        }
+        if (!ownerUserId) {
+            return true;
+        }
+        const normalizedOwnerUserId = String(ownerUserId ?? "").trim();
+        const content = String(message.content ?? "").trim();
+        return !normalizedOwnerUserId || !content || content.includes(`<@${normalizedOwnerUserId}>`) || content.includes(normalizedOwnerUserId);
+    }
+    async cleanupRecentCartQrMessages(channel, ownerUserId = null) {
+        if (!channel?.messages?.fetch) {
+            return 0;
+        }
+        const recentMessages = await channel.messages.fetch({ limit: 20 }).catch(() => null);
+        if (!recentMessages) {
+            return 0;
+        }
+        let cleaned = 0;
+        for (const message of recentMessages.values()) {
+            if (!this.isCartQrCodeMessage(message, ownerUserId)) {
+                continue;
+            }
+            const deleted = await message.delete().then(() => true).catch(() => false);
+            if (deleted) {
+                cleaned += 1;
+                continue;
+            }
+            if (!message.editable) {
+                continue;
+            }
+            const updated = await message.edit({
+                content: "QR Code removido automaticamente apos a confirmacao do pagamento.",
+                embeds: [],
+                components: [],
+                attachments: [],
+                files: [],
+            }).then(() => true).catch(() => false);
+            if (updated) {
+                cleaned += 1;
+            }
+        }
+        return cleaned;
     }
     getPrimaryProduct() {
         return this.dependencies.catalogService.listProducts()[0] ?? null;
@@ -6825,6 +6914,15 @@ class ManagerBotService {
             files: [],
         };
     }
+    buildAppsLoadingPayload() {
+        return {
+            content: "\uD83D\uDD04 | Carregando informa\u00E7\u00F5es da sua aplica\u00E7\u00E3o...",
+            embeds: [],
+            components: [],
+            attachments: [],
+            files: [],
+        };
+    }
     buildCartOpenedPayload(guild, user, channel, created) {
         const embed = new discord_js_1.EmbedBuilder()
             .setColor(0x22c55e)
@@ -7030,15 +7128,21 @@ class ManagerBotService {
     }
     formatAppsUptime(value) {
         if (typeof value === "string" && value.trim()) {
-            const parsedDate = Date.parse(value);
+            const trimmedValue = value.trim();
+            if (/^<t:\d+:R>$/u.test(trimmedValue)) {
+                return trimmedValue;
+            }
+            const parsedDate = Date.parse(trimmedValue);
             if (!Number.isNaN(parsedDate)) {
                 return this.formatAppsUptime(parsedDate);
             }
-            const parsedNumeric = this.parseAppsNumericValue(value);
-            if (parsedNumeric !== null) {
-                return this.formatAppsUptime(parsedNumeric);
+            if (/^-?(?:\d+(?:[.,]\d+)?)$/u.test(trimmedValue)) {
+                const parsedNumeric = this.parseAppsNumericValue(trimmedValue);
+                if (parsedNumeric !== null) {
+                    return this.formatAppsUptime(parsedNumeric);
+                }
             }
-            return value.trim();
+            return trimmedValue;
         }
         const numericValue = Number(value);
         if (!Number.isFinite(numericValue) || numericValue < 0) {
@@ -7046,29 +7150,24 @@ class ManagerBotService {
         }
         const nowMilliseconds = Date.now();
         const nowSeconds = Math.floor(nowMilliseconds / 1000);
-        let totalSeconds;
+        let startedAtMilliseconds;
         if (numericValue > nowMilliseconds * 0.5) {
-            totalSeconds = Math.max(0, Math.floor((nowMilliseconds - numericValue) / 1000));
+            startedAtMilliseconds = numericValue;
         }
         else if (numericValue > nowSeconds * 0.5) {
-            totalSeconds = Math.max(0, nowSeconds - Math.floor(numericValue));
+            startedAtMilliseconds = numericValue * 1000;
         }
         else if (numericValue > 1_000_000_000) {
-            totalSeconds = Math.floor(numericValue / 1000);
+            startedAtMilliseconds = nowMilliseconds - numericValue;
         }
         else {
-            totalSeconds = Math.floor(numericValue);
+            startedAtMilliseconds = nowMilliseconds - numericValue * 1000;
         }
-        const days = Math.floor(totalSeconds / 86400);
-        const hours = Math.floor((totalSeconds % 86400) / 3600);
-        const minutes = Math.floor((totalSeconds % 3600) / 60);
-        if (days > 0) {
-            return `ha ${days}d ${hours}h`;
+        const startedAtSeconds = Math.floor(startedAtMilliseconds / 1000);
+        if (!Number.isFinite(startedAtSeconds) || startedAtSeconds <= 0) {
+            return "--";
         }
-        if (hours > 0) {
-            return `ha ${hours}h ${minutes}m`;
-        }
-        return `ha ${Math.max(1, minutes)}m`;
+        return `<t:${startedAtSeconds}:R>`;
     }
     extractAppsOverviewMetrics(instance, overview) {
         const info = overview?.info ?? {};
