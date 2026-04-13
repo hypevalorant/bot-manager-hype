@@ -2907,10 +2907,25 @@ class ManagerBotService {
                 await interaction.message?.edit(processingPayload).catch(() => null);
             }
             if (action === "start") {
-                if (this.dependencies.squareCloudClient?.isConfigured?.() && !String(entry.instance.hostingAppId ?? "").startsWith("pending-")) {
+                entry.instance.status = "provisioning";
+                entry.instance.updatedAt = new Date().toISOString();
+                await this.persistStoreIfNeeded();
+                let boot = null;
+                if (this.dependencies.squareCloudProvisioningService && !String(entry.instance.hostingAppId ?? "").startsWith("pending-")) {
+                    boot = await this.dependencies.squareCloudProvisioningService.bootProvisionedApp(entry.instance.hostingAppId);
+                    if (!boot?.running) {
+                        entry.instance.status = "failed";
+                        entry.instance.updatedAt = new Date().toISOString();
+                        await this.persistStoreIfNeeded();
+                        throw new Error(this.buildSquareCloudBootFailureMessage(boot, "A SquareCloud iniciou o app, mas ele nÃ£o ficou em execuÃ§Ã£o."));
+                    }
+                }
+                else if (this.dependencies.squareCloudClient?.isConfigured?.() && !String(entry.instance.hostingAppId ?? "").startsWith("pending-")) {
                     await this.dependencies.squareCloudClient.startApp(entry.instance.hostingAppId);
                 }
-                entry.instance.status = "running";
+                if (!entry.instance.lastHeartbeatAt) {
+                    entry.instance.status = "provisioning";
+                }
             }
             else if (action === "stop") {
                 if (this.dependencies.squareCloudClient?.isConfigured?.() && !String(entry.instance.hostingAppId ?? "").startsWith("pending-")) {
@@ -2919,10 +2934,26 @@ class ManagerBotService {
                 entry.instance.status = "suspended";
             }
             else if (action === "restart") {
-                if (this.dependencies.squareCloudClient?.isConfigured?.() && !String(entry.instance.hostingAppId ?? "").startsWith("pending-")) {
-                    await this.dependencies.squareCloudClient.restartApp(entry.instance.hostingAppId);
+                entry.instance.status = "provisioning";
+                entry.instance.updatedAt = new Date().toISOString();
+                await this.persistStoreIfNeeded();
+                let boot = null;
+                if (this.dependencies.squareCloudProvisioningService && !String(entry.instance.hostingAppId ?? "").startsWith("pending-")) {
+                    boot = await this.dependencies.squareCloudProvisioningService.bootProvisionedApp(entry.instance.hostingAppId);
+                    if (!boot?.running) {
+                        entry.instance.status = "failed";
+                        entry.instance.updatedAt = new Date().toISOString();
+                        await this.persistStoreIfNeeded();
+                        throw new Error(this.buildSquareCloudBootFailureMessage(boot, "A SquareCloud reiniciou o app, mas ele nÃ£o ficou em execuÃ§Ã£o."));
+                    }
                 }
-                entry.instance.status = "running";
+                else if (this.dependencies.squareCloudClient?.isConfigured?.() && !String(entry.instance.hostingAppId ?? "").startsWith("pending-")) {
+                    await this.dependencies.squareCloudClient.restartApp(entry.instance.hostingAppId);
+                    await this.dependencies.squareCloudClient.startApp(entry.instance.hostingAppId).catch(() => null);
+                }
+                if (!entry.instance.lastHeartbeatAt) {
+                    entry.instance.status = "provisioning";
+                }
             }
             entry.instance.updatedAt = new Date().toISOString();
             await this.persistStoreIfNeeded();
@@ -4325,6 +4356,9 @@ class ManagerBotService {
         const instance = entry.instance;
         const bundle = entry.bundle;
         const metrics = this.extractAppsOverviewMetrics(instance, overview);
+        const embedColor = metrics.tone === "success" ? 0x22c55e : metrics.tone === "danger" ? 0xef4444 : 0x2563eb;
+        const statusFieldLabel = metrics.tone === "success" ? "\uD83D\uDFE2 | Status" : metrics.tone === "danger" ? "\uD83D\uDD34 | Status" : "\uD83D\uDFE1 | Status";
+        const statusIcon = metrics.tone === "success" ? "🟢" : metrics.tone === "danger" ? "🔴" : "🟡";
         const lines = [
             notice ? `**Atualização**\n${notice}` : null,
             instance
@@ -4369,7 +4403,7 @@ class ManagerBotService {
                 ].filter(Boolean).join("\n"),
         ].filter(Boolean);
         const embed = new discord_js_1.EmbedBuilder()
-            .setColor(instance?.status === "running" ? 0x22c55e : instance?.status === "suspended" ? 0xef4444 : 0x2563eb)
+            .setColor(embedColor)
             .setTitle("Manager | Suas Aplicações")
             .setDescription(this.limitMessageSize(lines.join("\n\n")));
         const formatCodeValue = (value) => {
@@ -4580,16 +4614,19 @@ class ManagerBotService {
             return [];
         }
         if (entry.instance) {
+            const powerState = this.getAppsPowerState(entry, overview);
             return [
                 new discord_js_1.ActionRowBuilder().addComponents(new discord_js_1.ButtonBuilder()
                     .setCustomId(`${CUSTOM_IDS.appsPowerPrefix}start:${page}:${entry.key}`)
                     .setLabel("Ligar")
                     .setEmoji("\u2B06\uFE0F")
-                    .setStyle(discord_js_1.ButtonStyle.Success), new discord_js_1.ButtonBuilder()
+                    .setStyle(discord_js_1.ButtonStyle.Success)
+                    .setDisabled(!powerState.canStart), new discord_js_1.ButtonBuilder()
                     .setCustomId(`${CUSTOM_IDS.appsPowerPrefix}stop:${page}:${entry.key}`)
                     .setLabel("Desligar")
                     .setEmoji("\u2B07\uFE0F")
-                    .setStyle(discord_js_1.ButtonStyle.Danger), new discord_js_1.ButtonBuilder()
+                    .setStyle(discord_js_1.ButtonStyle.Danger)
+                    .setDisabled(!powerState.canStop), new discord_js_1.ButtonBuilder()
                     .setCustomId(`${CUSTOM_IDS.appsPowerPrefix}restart:${page}:${entry.key}`)
                     .setLabel("Reiniciar")
                     .setEmoji("\uD83D\uDD04")
@@ -7036,20 +7073,25 @@ class ManagerBotService {
     extractAppsOverviewMetrics(instance, overview) {
         const info = overview?.info ?? {};
         const status = overview?.status ?? {};
-        const rawStatus = this.pickNestedValue(status, ["status", "state", "running", "currentStatus"]) ??
-            this.pickNestedValue(info, ["status", "state", "running"]);
+        const powerState = this.getAppsPowerState({ instance }, overview);
+        const rawStatus = powerState.rawStatus;
         let statusLabel = instance ? this.getStatusLabel(instance.status) : "nao disponivel";
-        if (typeof rawStatus === "boolean") {
-            statusLabel = rawStatus ? "Em execucao" : "Desligada";
-        }
-        else if (typeof rawStatus === "number") {
-            statusLabel = rawStatus > 0 ? "Em execucao" : "Desligada";
-        }
-        else if (typeof rawStatus === "string" && rawStatus.trim()) {
-            statusLabel = rawStatus.trim();
+        let tone = instance?.status === "running" ? "success" : instance?.status === "suspended" || instance?.status === "failed" ? "danger" : "neutral";
+        if (powerState.state !== "unknown" || rawStatus !== undefined && rawStatus !== null && rawStatus !== "") {
+            statusLabel = this.formatAppsPowerStateLabel(powerState);
+            if (powerState.state === "running") {
+                tone = "success";
+            }
+            else if (powerState.state === "stopped") {
+                tone = "danger";
+            }
+            else {
+                tone = "neutral";
+            }
         }
         return {
             status: statusLabel,
+            tone,
             cpu: this.formatAppsPercent(this.pickNestedValue(status, ["cpu", "cpuUsage", "usage.cpu", "usage.cpuUsage", "stats.cpu"])),
             ram: this.formatAppsUsage(this.pickNestedValue(status, ["ram", "memory", "stats.ram", "stats.memory"]), this.pickNestedValue(status, ["ram.used", "memory.used", "usage.ram.used", "usage.memory.used", "stats.ram.used", "stats.memory.used"]), this.pickNestedValue(status, ["ram.total", "ram.limit", "memory.total", "memory.limit", "usage.ram.total", "usage.memory.total", "stats.ram.total", "stats.memory.total", "memory.max"]), {
                 defaultUnit: "MB",
@@ -7086,8 +7128,20 @@ class ManagerBotService {
             runtimeOptions,
         });
         await this.dependencies.squareCloudClient.setAppEnvVars(instance.hostingAppId, envs);
-        await this.dependencies.squareCloudClient.restartApp(instance.hostingAppId);
-        instance.status = "running";
+        instance.status = "provisioning";
+        instance.updatedAt = new Date().toISOString();
+        if (typeof this.dependencies.squareCloudProvisioningService?.bootProvisionedApp === "function") {
+            const boot = await this.dependencies.squareCloudProvisioningService.bootProvisionedApp(instance.hostingAppId);
+            if (!boot?.running) {
+                instance.status = "failed";
+                instance.updatedAt = new Date().toISOString();
+                throw new Error(this.buildSquareCloudBootFailureMessage(boot, "A SquareCloud atualizou o app, mas ele nao ficou em execucao."));
+            }
+        }
+        else {
+            await this.dependencies.squareCloudClient.restartApp(instance.hostingAppId);
+            await this.dependencies.squareCloudClient.startApp(instance.hostingAppId).catch(() => null);
+        }
         instance.updatedAt = new Date().toISOString();
         return true;
     }

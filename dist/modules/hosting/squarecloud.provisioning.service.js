@@ -41,6 +41,70 @@ function readEnvFileAsBase64(pathEnvKeys, base64EnvKeys) {
     }
     return (0, node_fs_1.readFileSync)(absolutePath).toString("base64");
 }
+function wait(milliseconds) {
+    return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(milliseconds) || 0)));
+}
+function pickRuntimeStatusValue(payload) {
+    const data = payload?.response ?? payload ?? {};
+    const candidates = [
+        data.running,
+        data.status,
+        data.state,
+        data.currentStatus,
+        data?.usage?.running,
+        data?.usage?.status,
+        data?.stats?.running,
+        data?.stats?.status,
+    ];
+    for (const candidate of candidates) {
+        if (candidate !== undefined && candidate !== null && String(candidate).trim() !== "") {
+            return candidate;
+        }
+    }
+    return null;
+}
+function isRuntimeStatusRunning(payload) {
+    const rawStatus = pickRuntimeStatusValue(payload);
+    if (typeof rawStatus === "boolean") {
+        return rawStatus;
+    }
+    if (typeof rawStatus === "number") {
+        return rawStatus > 0;
+    }
+    const normalized = String(rawStatus ?? "").trim().toLowerCase();
+    if (!normalized) {
+        return false;
+    }
+    return ["running", "online", "started", "ready", "active", "em execucao", "em execução", "rodando"].some((token) => normalized.includes(token));
+}
+function isAlreadyStartedError(error) {
+    const payload = error?.response ?? error?.body ?? error;
+    const raw = [
+        error?.code,
+        error?.rawError?.code,
+        payload?.code,
+        payload?.error,
+        payload?.message,
+        error?.message,
+    ]
+        .map((value) => String(value ?? "").trim().toUpperCase())
+        .filter(Boolean)
+        .join(" ");
+    return raw.includes("CONTAINER_ALREADY_STARTED") ||
+        raw.includes("ALREADY STARTED") ||
+        raw.includes("JA ESTA LIG") ||
+        raw.includes("JÁ ESTÁ LIG");
+}
+function pickUploadedAppId(upload) {
+    return String(upload?.response?.id ??
+        upload?.response?.appId ??
+        upload?.response?.app_id ??
+        upload?.response?.application?.id ??
+        upload?.id ??
+        upload?.appId ??
+        upload?.app_id ??
+        "").trim();
+}
 class SquareCloudProvisioningService {
     squareCloudClient;
     sourceArtifactService;
@@ -91,15 +155,26 @@ class SquareCloudProvisioningService {
         const artifact = await this.sourceArtifactService.getArtifact(instance.sourceSlug, overrides);
         const runtimeOptions = this.sourceArtifactService.getRuntimeOptions(instance.sourceSlug, overrides);
         const upload = await this.squareCloudClient.uploadApplication(artifact.fileBuffer, artifact.fileName);
-        const appId = upload.response.id;
+        const appId = pickUploadedAppId(upload);
+        if (!appId) {
+            throw new Error("A SquareCloud respondeu o upload sem retornar o App ID da aplicação.");
+        }
         try {
-            await this.squareCloudClient.setAppEnvVars(appId, this.buildRuntimeEnv({
+            await this.applyRuntimeEnv(appId, this.buildRuntimeEnv({
                 appId,
                 discordApp,
                 instance,
                 runtimeOptions,
             }));
-            await this.squareCloudClient.startApp(appId);
+            const boot = await this.bootProvisionedApp(appId);
+            if (!boot?.ok) {
+                throw new Error("A SquareCloud recebeu o deploy, mas não aceitou iniciar a aplicação vendida automaticamente.");
+            }
+            return {
+                appId,
+                upload,
+                boot,
+            };
         }
         catch (error) {
             if (error && typeof error === "object") {
@@ -107,10 +182,6 @@ class SquareCloudProvisioningService {
             }
             throw error;
         }
-        return {
-            appId,
-            upload,
-        };
     }
     async updateInstance(instance, discordApp) {
         if (!this.squareCloudClient.isConfigured()) {
@@ -128,13 +199,21 @@ class SquareCloudProvisioningService {
         const runtimeOptions = this.sourceArtifactService.getRuntimeOptions(instance.sourceSlug, overrides);
         const commit = await this.squareCloudClient.commitApplication(instance.hostingAppId, artifact.fileBuffer, artifact.fileName);
         try {
-            await this.squareCloudClient.setAppEnvVars(instance.hostingAppId, this.buildRuntimeEnv({
+            await this.applyRuntimeEnv(instance.hostingAppId, this.buildRuntimeEnv({
                 appId: instance.hostingAppId,
                 discordApp,
                 instance,
                 runtimeOptions,
             }));
-            await this.squareCloudClient.restartApp(instance.hostingAppId);
+            const boot = await this.bootProvisionedApp(instance.hostingAppId);
+            if (!boot?.ok) {
+                throw new Error("A SquareCloud atualizou a aplicação, mas não aceitou iniciar o runtime automaticamente.");
+            }
+            return {
+                appId: instance.hostingAppId,
+                commit,
+                boot,
+            };
         }
         catch (error) {
             if (error && typeof error === "object") {
@@ -142,19 +221,91 @@ class SquareCloudProvisioningService {
             }
             throw error;
         }
-        return {
-            appId: instance.hostingAppId,
-            commit,
-        };
     }
     async restartInstance(instance) {
-        await this.squareCloudClient.startApp(instance.hostingAppId);
+        return this.bootProvisionedApp(instance.hostingAppId);
     }
     async suspendInstance(instance) {
         await this.squareCloudClient.stopApp(instance.hostingAppId);
     }
     async deleteInstance(instance) {
         await this.squareCloudClient.deleteApp(instance.hostingAppId);
+    }
+    async applyRuntimeEnv(appId, envs) {
+        return this.squareCloudClient.setAppEnvVars(appId, envs);
+    }
+    async bootProvisionedApp(appId) {
+        const normalizedAppId = String(appId ?? "").trim();
+        if (!normalizedAppId) {
+            throw new Error("App ID da SquareCloud obrigatório para iniciar a aplicação.");
+        }
+        const attempts = [];
+        const pushAttempt = (action, ok, result = null, error = null) => {
+            attempts.push({
+                action,
+                ok,
+                result,
+                error: error ? String(error?.message ?? error) : null,
+            });
+        };
+        try {
+            const result = await this.squareCloudClient.startApp(normalizedAppId);
+            pushAttempt("start", true, result);
+        }
+        catch (error) {
+            const alreadyStarted = isAlreadyStartedError(error);
+            pushAttempt("start", alreadyStarted, alreadyStarted ? { alreadyStarted: true } : null, error);
+        }
+        await wait(2500);
+        if (typeof this.squareCloudClient.restartApp === "function") {
+            try {
+                const restart = await this.squareCloudClient.restartApp(normalizedAppId);
+                pushAttempt("restart", true, restart);
+            }
+            catch (error) {
+                pushAttempt("restart", false, null, error);
+            }
+        }
+        await wait(2500);
+        try {
+            const result = await this.squareCloudClient.startApp(normalizedAppId);
+            pushAttempt("start_after_restart", true, result);
+        }
+        catch (error) {
+            const alreadyStarted = isAlreadyStartedError(error);
+            pushAttempt("start_after_restart", alreadyStarted, alreadyStarted ? { alreadyStarted: true } : null, error);
+        }
+        for (let attempt = 1; attempt <= 4; attempt += 1) {
+            await wait(2500);
+            try {
+                const status = await this.squareCloudClient.getAppStatus(normalizedAppId);
+                pushAttempt(`status_check_${attempt}`, true, status);
+                if (isRuntimeStatusRunning(status)) {
+                    return {
+                        ok: true,
+                        running: true,
+                        attempts,
+                        status,
+                    };
+                }
+            }
+            catch (error) {
+                pushAttempt(`status_check_${attempt}`, false, null, error);
+            }
+            try {
+                const result = await this.squareCloudClient.startApp(normalizedAppId);
+                pushAttempt(`start_retry_${attempt}`, true, result);
+            }
+            catch (error) {
+                const alreadyStarted = isAlreadyStartedError(error);
+                pushAttempt(`start_retry_${attempt}`, alreadyStarted, alreadyStarted ? { alreadyStarted: true } : null, error);
+            }
+        }
+        return {
+            ok: false,
+            running: false,
+            attempts,
+        };
     }
     buildRuntimeEnv(input) {
         const runtimeStateEnv = this.buildRuntimeStateEnv(input);

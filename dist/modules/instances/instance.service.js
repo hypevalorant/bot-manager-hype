@@ -143,9 +143,18 @@ class InstanceService {
             return this.provision(subscription);
         }
         if (this.provisioningService?.isConfigured() && !instance.hostingAppId.startsWith("pending-")) {
-            await this.provisioningService.restartInstance(instance);
+            instance.status = "provisioning";
+            instance.updatedAt = (0, utils_js_1.nowIso)();
+            const boot = await this.provisioningService.restartInstance(instance);
+            if (!boot?.running) {
+                instance.status = "failed";
+                instance.updatedAt = (0, utils_js_1.nowIso)();
+                throw new Error("A SquareCloud iniciou a instância, mas ela não ficou em execução.");
+            }
         }
-        instance.status = "running";
+        else {
+            instance.status = "running";
+        }
         instance.expiresAt = subscription.currentPeriodEnd ?? instance.expiresAt;
         instance.updatedAt = (0, utils_js_1.nowIso)();
         return instance;
@@ -196,6 +205,8 @@ class InstanceService {
         if (product?.sourceSlug && product.sourceSlug !== instance.sourceSlug) {
             instance.sourceSlug = product.sourceSlug;
         }
+        instance.status = "provisioning";
+        instance.updatedAt = (0, utils_js_1.nowIso)();
         const update = await this.provisioningService.updateInstance(instance, discordApp);
         instance.configVersion = Number(instance.configVersion ?? 1) + 1;
         instance.updatedAt = (0, utils_js_1.nowIso)();
@@ -214,10 +225,14 @@ class InstanceService {
             throw new Error("Assinatura da instância não encontrada.");
         }
         instance.lastHeartbeatAt = (0, utils_js_1.nowIso)();
+        if (["provisioning", "starting", "active"].includes(String(instance.status ?? "").toLowerCase())) {
+            instance.status = "running";
+        }
         instance.updatedAt = instance.lastHeartbeatAt;
+        const normalizedStatus = String(instance.status ?? "").toLowerCase();
         return {
             ok: true,
-            desiredState: instance.status === "running" ? "running" : "suspended",
+            desiredState: ["running", "provisioning", "starting", "active"].includes(normalizedStatus) ? "running" : "suspended",
             nextConfigVersion: instance.configVersion,
             metricsReceived: metrics,
             expiresAt: instance.expiresAt,
@@ -331,7 +346,7 @@ class InstanceService {
                 ? await this.provisioningService.updateInstance(instance, app)
                 : await this.provisioningService.provisionInstance(instance, app);
             instance.hostingAppId = provisioning.appId;
-            instance.status = "running";
+            instance.status = instance.lastHeartbeatAt ? "running" : "provisioning";
             instance.updatedAt = (0, utils_js_1.nowIso)();
             return instance;
         }

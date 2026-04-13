@@ -3,7 +3,10 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.buildManagedRuntimeWrapperSource = buildManagedRuntimeWrapperSource;
 function buildManagedRuntimeWrapperSource() {
     return String.raw `const { spawn } = require("node:child_process");
+const fs = require("node:fs");
 const path = require("node:path");
+
+loadPackagedRuntimeEnv();
 
 const managerApiUrl = requireEnv("MANAGER_API_URL");
 const instanceId = requireEnv("INSTANCE_ID");
@@ -14,10 +17,136 @@ let childProcess = null;
 let shutdownRequested = false;
 const startedAt = Date.now();
 
+function formatValue(value, fallback = "nao informado") {
+  const normalized = String(value || "").trim();
+  return normalized || fallback;
+}
+
+function formatDateTime(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) {
+    return "";
+  }
+  const date = new Date(normalized);
+  if (!Number.isFinite(date.getTime())) {
+    return normalized;
+  }
+  return new Intl.DateTimeFormat("pt-BR", {
+    dateStyle: "short",
+    timeStyle: "medium",
+    timeZone: process.env.TZ || "America/Sao_Paulo",
+  }).format(date);
+}
+
+function formatStatus(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  const labels = {
+    pending: "Pendente",
+    active: "Ativa",
+    provisioning: "Provisionando",
+    starting: "Inicializando",
+    running: "Em execucao",
+    suspended: "Suspensa",
+    stopped: "Desligada",
+    failed: "Falhou",
+    deleted: "Deletada",
+    expired: "Expirada",
+  };
+  return labels[normalized] || formatValue(value);
+}
+
+function formatDiscordIdentity(username, userId) {
+  const normalizedUsername = String(username || "").trim();
+  const normalizedUserId = String(userId || "").trim();
+  if (normalizedUsername && normalizedUserId) {
+    return normalizedUsername + " (" + normalizedUserId + ")";
+  }
+  return normalizedUsername || normalizedUserId || "";
+}
+
+function formatUrlOrigin(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) {
+    return "";
+  }
+  try {
+    return new URL(normalized).origin;
+  } catch {
+    return normalized;
+  }
+}
+
+function formatError(error) {
+  if (!error) {
+    return "erro desconhecido";
+  }
+  return String(error?.stack || error?.message || error).trim() || "erro desconhecido";
+}
+
+function printSection(title, lines = []) {
+  console.log("");
+  console.log("[runtime-gerenciado] ============================================================");
+  console.log("[runtime-gerenciado] " + String(title || "Evento do runtime").toUpperCase());
+  console.log("[runtime-gerenciado] ============================================================");
+  for (const line of lines) {
+    if (line === "") {
+      console.log("[runtime-gerenciado]");
+      continue;
+    }
+    if (!line) {
+      continue;
+    }
+    console.log("[runtime-gerenciado] " + line);
+  }
+  console.log("[runtime-gerenciado] ------------------------------------------------------------");
+}
+
+function groupLines(title, lines = []) {
+  const visibleLines = lines.filter(Boolean);
+  if (visibleLines.length === 0) {
+    return [];
+  }
+  return ["", title].concat(visibleLines.map((line) => "  - " + line));
+}
+
+function loadPackagedRuntimeEnv() {
+  const envPath = path.join(process.cwd(), "runtime-env.json");
+  if (!fs.existsSync(envPath)) {
+    return;
+  }
+
+  try {
+    const parsed = JSON.parse(fs.readFileSync(envPath, "utf8"));
+    const env = parsed && typeof parsed.env === "object" ? parsed.env : parsed;
+    if (!env || typeof env !== "object" || Array.isArray(env)) {
+      return;
+    }
+
+    let applied = 0;
+    for (const [key, value] of Object.entries(env)) {
+      const normalizedKey = String(key || "").trim();
+      if (!normalizedKey || value === undefined || value === null) {
+        continue;
+      }
+      if (String(process.env[normalizedKey] || "").trim()) {
+        continue;
+      }
+      process.env[normalizedKey] = String(value);
+      applied += 1;
+    }
+
+    if (applied > 0) {
+      console.log("[runtime-gerenciado] Ambiente inicial carregado do pacote vendido.");
+    }
+  } catch (error) {
+    console.warn("[runtime-gerenciado] Nao consegui carregar runtime-env.json:", error);
+  }
+}
+
 function requireEnv(name) {
   const value = String(process.env[name] || "").trim();
   if (!value) {
-    throw new Error(name + " é obrigatória para o runtime gerenciado.");
+    throw new Error(name + " e obrigatoria para o runtime gerenciado.");
   }
   return value;
 }
@@ -81,6 +210,9 @@ function syncBootstrapEnv(bootstrap) {
 
 function buildRuntimeSummary(payload) {
   return {
+    applicationName: String(process.env.DISCORD_APP_NAME || payload?.config?.discordAppName || ""),
+    instanceStatus: String(payload?.instance?.status || process.env.INSTANCE_STATUS || ""),
+    expiresAt: String(payload?.instance?.expiresAt || process.env.INSTANCE_EXPIRES_AT || ""),
     saleSequenceLabel: String(payload?.instance?.saleSequenceLabel || process.env.TENANT_SALE_SEQUENCE_LABEL || ""),
     soldAt: String(payload?.instance?.soldAt || process.env.TENANT_SOLD_AT || ""),
     managedDescription: String(payload?.instance?.managedDescription || process.env.SQUARECLOUD_DESCRIPTION || ""),
@@ -104,16 +236,69 @@ function buildRuntimeSummary(payload) {
     discordClientId: String(process.env.DISCORD_CLIENT_ID || process.env.CLIENT_ID || ""),
     squareCloudAppId: String(process.env.SQUARECLOUD_APP_ID || process.env.SQUARECLOUD_APPLICATION_ID || ""),
     managerInstanceId: String(payload?.instance?.id || process.env.INSTANCE_ID || ""),
+    sourceSlug: String(process.env.SOURCE_SLUG || process.env.INSTANCE_SOURCE_SLUG || payload?.tenant?.productSlug || ""),
+    sourceVersion: String(process.env.SOURCE_VERSION || ""),
+    entrypoint: resolveEntrypoint(),
+    managerApiOrigin: formatUrlOrigin(managerApiUrl),
   };
 }
 
 function logRuntimeSummary(label, payload) {
-  console.log("[runtime-gerenciado] " + label + ":", JSON.stringify(buildRuntimeSummary(payload), null, 2));
+  const summary = buildRuntimeSummary(payload);
+  const productPlan = [
+    formatValue(summary.productName || summary.productSlug),
+    formatValue(summary.planName),
+  ].filter((value) => value !== "nao informado").join(" / ");
+  printSection(label, [
+    ...groupLines("Identificacao", [
+      "Aplicacao vendida: " + formatValue(summary.applicationName),
+      "Produto e plano: " + formatValue(productPlan),
+      "Descricao na SquareCloud: " + formatValue(summary.managedDescription),
+      "Status no manager: " + formatStatus(summary.instanceStatus),
+      "Expira em: " + formatValue(formatDateTime(summary.expiresAt) || summary.expiresAt),
+    ]),
+    ...groupLines("Venda", [
+      "Sequencia da venda: " + formatValue(summary.saleSequenceLabel),
+      "Venda registrada em: " + formatValue(formatDateTime(summary.soldAt) || summary.soldAt),
+      "Assinatura: " + formatValue(summary.subscriptionId),
+      "Cliente interno: " + formatValue(summary.customerId),
+    ]),
+    ...groupLines("Discord", [
+      "Comprador: " + formatValue(formatDiscordIdentity(summary.purchaserDiscordUsername, summary.purchaserDiscordUserId)),
+      "Cliente: " + formatValue(formatDiscordIdentity(summary.customerDiscordUsername, summary.customerDiscordUserId)),
+      "Dono comercial: " + formatValue(summary.commercialOwnerDiscordUserId),
+      "Dono operacional do bot: " + formatValue(summary.botOwnerDiscordUserId),
+      "Application ID: " + formatValue(summary.discordApplicationId),
+      "Client ID: " + formatValue(summary.discordClientId),
+    ]),
+    ...groupLines("Servidor", [
+      "Servidor vinculado: " + formatValue(summary.assignedGuildId),
+      "URL do servidor vinculado: " + formatValue(summary.assignedGuildUrl),
+      "Servidor padrao: " + formatValue(summary.defaultGuildId),
+      "URL do servidor padrao: " + formatValue(summary.defaultGuildUrl),
+    ]),
+    ...groupLines("Hospedagem e execucao", [
+      "App ID na SquareCloud: " + formatValue(summary.squareCloudAppId),
+      "ID interno da instancia: " + formatValue(summary.managerInstanceId),
+      "Fonte da aplicacao: " + formatValue(summary.sourceSlug),
+      "Versao da fonte: " + formatValue(summary.sourceVersion),
+      "Arquivo inicial: " + formatValue(summary.entrypoint),
+      "API do manager: " + formatValue(summary.managerApiOrigin),
+      "PID do processo gerenciador: " + process.pid,
+      childProcess?.pid ? "PID da aplicacao: " + childProcess.pid : null,
+    ]),
+    ...groupLines("Links uteis", [
+      "Adicionar bot ao servidor: " + formatValue(summary.installUrl),
+    ]),
+  ]);
 }
 
 function spawnBotProcess() {
   const entrypoint = resolveEntrypoint();
-  console.log("[runtime-gerenciado] iniciando a source em", entrypoint);
+  printSection("Iniciando aplicacao vendida", [
+    "Arquivo inicial da aplicacao: " + formatValue(entrypoint),
+    "PID do processo gerenciador: " + process.pid,
+  ]);
 
   childProcess = spawn(process.execPath, [entrypoint], {
     cwd: process.cwd(),
@@ -127,10 +312,11 @@ function spawnBotProcess() {
       return;
     }
 
-    console.error(
-      "[runtime-gerenciado] processo da source encerrou inesperadamente",
-      JSON.stringify({ code, signal }),
-    );
+    printSection("Aplicacao vendida encerrada inesperadamente", [
+      "Codigo de saida: " + formatValue(code, "sem codigo"),
+      "Sinal recebido: " + formatValue(signal, "sem sinal"),
+      "A SquareCloud pode exibir o app como exited quando a aplicacao fecha logo apos iniciar.",
+    ]);
     process.exit(code ?? 1);
   });
 }
@@ -141,7 +327,12 @@ function requestShutdown(reason) {
   }
 
   shutdownRequested = true;
-  console.warn("[runtime-gerenciado] encerrando source:", reason);
+  printSection("Encerrando aplicacao vendida", [
+    "Motivo: " + formatValue(reason),
+    "Status atual no manager: " + formatValue(process.env.INSTANCE_STATUS),
+    "Expira em: " + formatValue(process.env.INSTANCE_EXPIRES_AT),
+    "App ID da SquareCloud: " + formatValue(process.env.SQUARECLOUD_APP_ID || process.env.SQUARECLOUD_APPLICATION_ID),
+  ]);
 
   if (childProcess && !childProcess.killed) {
     childProcess.kill("SIGTERM");
@@ -169,11 +360,11 @@ async function sendHeartbeat() {
   syncBootstrapEnv(heartbeat);
   const currentAssignedGuildId = String(process.env.TENANT_ASSIGNED_GUILD_ID || "");
   if (currentAssignedGuildId && currentAssignedGuildId !== previousAssignedGuildId) {
-    logRuntimeSummary("servidor vinculado atualizado", heartbeat);
+    logRuntimeSummary("Servidor vinculado atualizado pelo manager", heartbeat);
   }
 
   if (String(heartbeat?.desiredState || "") !== "running") {
-    requestShutdown("manager solicitou bloqueio/suspensao");
+    requestShutdown("o manager solicitou bloqueio ou suspensao da aplicacao");
   }
 }
 
@@ -184,13 +375,15 @@ async function main() {
   });
 
   syncBootstrapEnv(bootstrap);
-  logRuntimeSummary("contexto da aplicação vendida", bootstrap);
+  logRuntimeSummary("Contexto recebido da aplicacao vendida", bootstrap);
   spawnBotProcess();
   await sendHeartbeat();
 
   const interval = setInterval(() => {
     sendHeartbeat().catch((error) => {
-      console.error("[runtime-gerenciado] heartbeat falhou:", error);
+      printSection("Falha ao sincronizar status com o manager", [
+        formatError(error),
+      ]);
     });
   }, heartbeatIntervalMs);
   interval.unref();
@@ -200,7 +393,9 @@ process.on("SIGTERM", () => requestShutdown("SIGTERM"));
 process.on("SIGINT", () => requestShutdown("SIGINT"));
 
 main().catch((error) => {
-  console.error("[runtime-gerenciado] bootstrap falhou:", error);
+  printSection("Falha ao iniciar contexto da aplicacao vendida", [
+    formatError(error),
+  ]);
   process.exit(1);
 });
 `;
