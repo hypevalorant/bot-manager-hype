@@ -5,6 +5,7 @@ exports.createEmptyManagerRuntimeConfig = createEmptyManagerRuntimeConfig;
 exports.InMemoryStore = void 0;
 const node_fs_1 = require("node:fs");
 const node_path_1 = require("node:path");
+const node_crypto_1 = require("node:crypto");
 const utils_js_1 = require("./utils.js");
 const STATIC_IDS = {
     products: {
@@ -32,15 +33,25 @@ function createEmptyManagerRuntimeConfig() {
             customerRoleId: null,
             cartStaffRoleIds: [],
             logsChannelId: null,
+            logChannelIds: {
+                purchase: null,
+                payment: null,
+                subscription: null,
+                instance: null,
+                admin: null,
+            },
             cartInactivityMinutes: 5,
             cartChannelNameTemplate: "🛒・{guild}",
             autoAssignCustomerRole: true,
+            coupons: [],
         },
         sources: {
             "bot-ticket-hype": {
+                memory: process.env.SOURCE_MEMORY_BOT_TICKET_HYPE ?? "256",
                 githubRepo: process.env.SOURCE_GITHUB_REPO_BOT_TICKET_HYPE ?? "hypevalorant/bot-ticket-hype",
                 githubRef: process.env.SOURCE_GITHUB_REF_BOT_TICKET_HYPE ?? "main",
-                memory: process.env.SOURCE_MEMORY_BOT_TICKET_HYPE ?? "256",
+                githubPath: process.env.SOURCE_GITHUB_PATH_BOT_TICKET_HYPE ?? null,
+                githubToken: process.env.SOURCE_GITHUB_TOKEN_BOT_TICKET_HYPE ?? process.env.GITHUB_TOKEN ?? null,
                 excludePaths: ["data", "transcripts"],
             },
         },
@@ -226,6 +237,7 @@ function buildSeedStoreState() {
         payments: [],
         checkoutSessions: [],
         purchaseSetupSessions: [],
+        provisioningJobs: [],
         managerRuntimeConfig: createEmptyManagerRuntimeConfig(),
     };
 }
@@ -240,9 +252,13 @@ class InMemoryStore {
     payments = [];
     checkoutSessions = [];
     purchaseSetupSessions = [];
+    provisioningJobs = [];
     managerRuntimeConfig = createEmptyManagerRuntimeConfig();
+    snapshotFilePath = (0, node_path_1.resolve)(process.cwd(), process.env.MANAGER_STORE_FILE ?? "data/manager-store.json");
+    lastPersistedHash = null;
     constructor() {
         this.seed();
+        this.loadSnapshotFromDisk();
     }
     seed() {
         const seed = buildSeedStoreState();
@@ -300,6 +316,107 @@ class InMemoryStore {
         return Object.fromEntries(Object.entries(runtimeEnv)
             .filter(([key, value]) => String(key).trim() && value !== undefined && value !== null)
             .map(([key, value]) => [String(key).trim(), String(value)]));
+    }
+    mergeManagerRuntimeConfig(existingValue) {
+        const defaults = createEmptyManagerRuntimeConfig();
+        const current = existingValue && typeof existingValue === "object" ? existingValue : {};
+        const existingAccess = current.access && typeof current.access === "object" ? current.access : {};
+        const existingSales = current.sales && typeof current.sales === "object" ? current.sales : {};
+        const existingSources = current.sources && typeof current.sources === "object" ? current.sources : {};
+        const existingBilling = current.billing && typeof current.billing === "object" ? current.billing : {};
+        const existingEfipay = existingBilling.efipay && typeof existingBilling.efipay === "object"
+            ? existingBilling.efipay
+            : {};
+        return {
+            ...defaults,
+            ...current,
+            access: {
+                ...defaults.access,
+                ...existingAccess,
+                adminUserIds: Array.isArray(existingAccess.adminUserIds) ? existingAccess.adminUserIds : [],
+                staffUserIds: Array.isArray(existingAccess.staffUserIds) ? existingAccess.staffUserIds : [],
+                staffRoleIds: Array.isArray(existingAccess.staffRoleIds) ? existingAccess.staffRoleIds : [],
+            },
+            sales: {
+                ...defaults.sales,
+                ...existingSales,
+                logChannelIds: {
+                    ...(defaults.sales.logChannelIds ?? {}),
+                    ...(existingSales.logChannelIds && typeof existingSales.logChannelIds === "object" ? existingSales.logChannelIds : {}),
+                },
+                coupons: Array.isArray(existingSales.coupons) ? existingSales.coupons : [],
+            },
+            sources: {
+                ...(defaults.sources && typeof defaults.sources === "object" ? defaults.sources : {}),
+                ...(existingSources && typeof existingSources === "object" ? existingSources : {}),
+            },
+            billing: {
+                ...defaults.billing,
+                ...existingBilling,
+                efipay: {
+                    ...defaults.billing.efipay,
+                    ...existingEfipay,
+                },
+            },
+        };
+    }
+    applySnapshot(snapshot) {
+        const source = snapshot && typeof snapshot === "object" ? snapshot : {};
+        this.products = Array.isArray(source.products) ? source.products : this.products;
+        this.productAddons = Array.isArray(source.productAddons) ? source.productAddons : this.productAddons;
+        this.plans = Array.isArray(source.plans) ? source.plans : this.plans;
+        this.customers = Array.isArray(source.customers) ? source.customers : [];
+        this.discordApps = Array.isArray(source.discordApps) ? source.discordApps : this.discordApps;
+        this.subscriptions = Array.isArray(source.subscriptions) ? source.subscriptions : [];
+        this.instances = Array.isArray(source.instances) ? source.instances : [];
+        this.payments = Array.isArray(source.payments) ? source.payments : [];
+        this.checkoutSessions = Array.isArray(source.checkoutSessions) ? source.checkoutSessions : [];
+        this.purchaseSetupSessions = Array.isArray(source.purchaseSetupSessions) ? source.purchaseSetupSessions : [];
+        this.provisioningJobs = Array.isArray(source.provisioningJobs) ? source.provisioningJobs : [];
+        this.managerRuntimeConfig = this.mergeManagerRuntimeConfig(source.managerRuntimeConfig);
+    }
+    loadSnapshotFromDisk() {
+        if (!(0, node_fs_1.existsSync)(this.snapshotFilePath)) {
+            return;
+        }
+        const raw = (0, utils_js_1.parseJsonSafe)((0, node_fs_1.readFileSync)(this.snapshotFilePath, "utf8"));
+        if (!raw || typeof raw !== "object") {
+            return;
+        }
+        this.applySnapshot(raw);
+        const payload = JSON.stringify(this.toSnapshot());
+        this.lastPersistedHash = (0, node_crypto_1.createHash)("sha256").update(payload).digest("hex");
+    }
+    toSnapshot() {
+        return {
+            customers: this.customers,
+            products: this.products,
+            productAddons: this.productAddons,
+            plans: this.plans,
+            discordApps: this.discordApps,
+            subscriptions: this.subscriptions,
+            instances: this.instances,
+            payments: this.payments,
+            checkoutSessions: this.checkoutSessions,
+            purchaseSetupSessions: this.purchaseSetupSessions,
+            provisioningJobs: this.provisioningJobs,
+            managerRuntimeConfig: this.managerRuntimeConfig,
+        };
+    }
+    async flush() {
+        const snapshot = this.toSnapshot();
+        const payload = JSON.stringify(snapshot);
+        const hash = (0, node_crypto_1.createHash)("sha256").update(payload).digest("hex");
+        if (hash === this.lastPersistedHash) {
+            return false;
+        }
+        (0, node_fs_1.mkdirSync)((0, node_path_1.dirname)(this.snapshotFilePath), { recursive: true });
+        (0, node_fs_1.writeFileSync)(this.snapshotFilePath, payload, "utf8");
+        this.lastPersistedHash = hash;
+        return true;
+    }
+    async close() {
+        await this.flush().catch(() => undefined);
     }
 }
 exports.InMemoryStore = InMemoryStore;

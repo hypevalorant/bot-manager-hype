@@ -1,0 +1,46 @@
+name: Provisioning Worker
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: Provisioning job id
+        required: false
+      instance_id:
+        description: Instance id
+        required: false
+      reason:
+        description: Dispatch reason
+        required: false
+
+concurrency:
+  group: provisioning-worker
+  cancel-in-progress: false
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Run provisioning worker
+        env:
+          MANAGER_API_URL: ${{ secrets.MANAGER_API_URL }}
+          PROVISIONING_WORKER_TOKEN: ${{ secrets.PROVISIONING_WORKER_TOKEN }}
+          SQUARECLOUD_API_KEY: ${{ secrets.SQUARECLOUD_API_KEY }}
+          SQUARECLOUD_UPLOAD_API_KEY: ${{ secrets.SQUARECLOUD_UPLOAD_API_KEY }}
+          SQUARECLOUD_ACCOUNT_ID: ${{ secrets.SQUARECLOUD_ACCOUNT_ID }}
+          SQUARECLOUD_API_BASE_URL: https://api.squarecloud.app/v2
+          SOURCE_ARTIFACTS_DIR: runtime-artifacts
+          PROVISIONING_WORKER_ID: github-actions-${{ github.run_id }}
+          PROVISIONING_WORKER_MAX_TICKS: 12
+          PROVISIONING_WORKER_POLL_MS: 10000
+        run: npm run worker:provisioning

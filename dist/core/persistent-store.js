@@ -24,6 +24,7 @@ class PersistentStore {
     payments = [];
     checkoutSessions = [];
     purchaseSetupSessions = [];
+    provisioningJobs = [];
     managerRuntimeConfig = (0, store_js_1.createEmptyManagerRuntimeConfig)();
     constructor(databaseUrl) {
         this.databaseUrl = databaseUrl;
@@ -79,6 +80,10 @@ class PersistentStore {
         }
         const configuredPath = String(process.env[pathEnvKey] ?? "").trim();
         if (!configuredPath) {
+            return null;
+        }
+        if (process.platform !== "win32" && /^[a-z]:[\\/]/iu.test(configuredPath)) {
+            console.warn(`${pathEnvKey} aponta para um caminho Windows local (${configuredPath}) e foi ignorado. Em deploy use /home/container/... ou ${base64EnvKey}.`);
             return null;
         }
         const candidatePaths = [
@@ -142,6 +147,7 @@ class PersistentStore {
             })),
             checkoutSessions: this.arrayOrEmpty(existing.checkoutSessions),
             purchaseSetupSessions: this.arrayOrEmpty(existing.purchaseSetupSessions),
+            provisioningJobs: this.arrayOrEmpty(existing.provisioningJobs),
             managerRuntimeConfig: this.mergeManagerRuntimeConfig(existing.managerRuntimeConfig),
         };
     }
@@ -223,6 +229,7 @@ class PersistentStore {
         const defaults = (0, store_js_1.createEmptyManagerRuntimeConfig)();
         const current = existingValue && typeof existingValue === "object" ? existingValue : {};
         const existingAccess = current.access && typeof current.access === "object" ? current.access : {};
+        const existingSales = current.sales && typeof current.sales === "object" ? current.sales : {};
         const existingSources = current.sources && typeof current.sources === "object" ? current.sources : {};
         const existingBilling = current.billing && typeof current.billing === "object" ? current.billing : {};
         const existingEfipay = existingBilling.efipay && typeof existingBilling.efipay === "object"
@@ -257,6 +264,15 @@ class PersistentStore {
                 staffUserIds: Array.isArray(existingAccess.staffUserIds) ? existingAccess.staffUserIds : [],
                 staffRoleIds: Array.isArray(existingAccess.staffRoleIds) ? existingAccess.staffRoleIds : [],
             },
+            sales: {
+                ...defaults.sales,
+                ...existingSales,
+                logChannelIds: {
+                    ...(defaults.sales.logChannelIds ?? {}),
+                    ...(existingSales.logChannelIds && typeof existingSales.logChannelIds === "object" ? existingSales.logChannelIds : {}),
+                },
+                coupons: Array.isArray(existingSales.coupons) ? existingSales.coupons : [],
+            },
             sources: mergedSources,
             billing: {
                 ...defaults.billing,
@@ -279,6 +295,7 @@ class PersistentStore {
         this.payments = snapshot.payments;
         this.checkoutSessions = snapshot.checkoutSessions;
         this.purchaseSetupSessions = snapshot.purchaseSetupSessions;
+        this.provisioningJobs = snapshot.provisioningJobs;
         this.managerRuntimeConfig = snapshot.managerRuntimeConfig;
     }
     toSnapshot() {
@@ -293,6 +310,7 @@ class PersistentStore {
             payments: this.payments,
             checkoutSessions: this.checkoutSessions,
             purchaseSetupSessions: this.purchaseSetupSessions,
+            provisioningJobs: this.provisioningJobs,
             managerRuntimeConfig: this.managerRuntimeConfig,
         };
     }
@@ -322,6 +340,16 @@ async function createStore() {
     if (!databaseUrl) {
         return new store_js_1.InMemoryStore();
     }
-    const store = new PersistentStore(databaseUrl);
-    return store.initialize();
+    const fallbackToMemory = String(process.env.DATABASE_FALLBACK_TO_MEMORY ?? "true").trim().toLowerCase() !== "false";
+    try {
+        const store = new PersistentStore(databaseUrl);
+        return await store.initialize();
+    }
+    catch (error) {
+        if (!fallbackToMemory) {
+            throw error;
+        }
+        console.warn("[store] Falha ao iniciar PostgreSQL; usando memoria do processo. Configure DATABASE_URL/SSL corretamente para persistencia.", error);
+        return new store_js_1.InMemoryStore();
+    }
 }

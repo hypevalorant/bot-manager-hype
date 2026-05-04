@@ -107,6 +107,16 @@ class SourceArtifactService {
                 error: `Arquivo nao encontrado em ${explicitPath}.`,
             };
         }
+        const githubSource = this.getGitHubSourceConfig(sourceSlug, runtimeSourceConfig);
+        if (githubSource) {
+            return {
+                mode: "github_archive",
+                sourcePath: githubSource.sourceLabel,
+                artifactPath: this.getGeneratedArtifactPath(sourceSlug),
+                envKey: githubSource.envKey,
+                github: githubSource,
+            };
+        }
         const projectDir = this.resolveConfiguredPath(runtimeSourceConfig.projectDir ?? this.readEnvValue(projectDirKey));
         if (projectDir && (0, node_fs_1.existsSync)(projectDir)) {
             return {
@@ -116,16 +126,23 @@ class SourceArtifactService {
                 envKey: projectDirKey,
             };
         }
-        const githubSource = this.getGitHubSourceConfig(sourceSlug, runtimeSourceConfig);
-        if (githubSource) {
+        if (generatedZipExists) {
             return {
-                mode: "github_archive",
-                sourcePath: githubSource.sourceLabel,
-                artifactPath: this.getGeneratedArtifactPath(sourceSlug),
-                envKey: githubSource.envKey,
-                github: githubSource,
+                mode: "zip",
+                sourcePath: generatedZip,
+                artifactPath: generatedZip,
                 warning: projectDir
-                    ? `Pasta configurada em ${projectDirKey} nao foi encontrada em ${projectDir}. Usando a origem do GitHub configurada.`
+                    ? `Pasta configurada em ${projectDirKey} nao foi encontrada em ${projectDir}. Usando o artefato gerado ${generatedZip}.`
+                    : undefined,
+            };
+        }
+        if (bundledZipExists) {
+            return {
+                mode: "zip",
+                sourcePath: bundledZip,
+                artifactPath: bundledZip,
+                warning: projectDir
+                    ? `Pasta configurada em ${projectDirKey} nao foi encontrada em ${projectDir}. Usando o zip padrao ${bundledZip}.`
                     : undefined,
             };
         }
@@ -155,20 +172,6 @@ class SourceArtifactService {
                 error: `Pasta da source nao encontrada em ${projectDir}.`,
             };
         }
-        if (bundledZipExists) {
-            return {
-                mode: "zip",
-                sourcePath: bundledZip,
-                artifactPath: bundledZip,
-            };
-        }
-        if (generatedZipExists) {
-            return {
-                mode: "zip",
-                sourcePath: generatedZip,
-                artifactPath: generatedZip,
-            };
-        }
         return {
             mode: "missing",
             artifactPath: bundledZip,
@@ -178,25 +181,49 @@ class SourceArtifactService {
     async getArtifact(sourceSlug, overrides = {}) {
         const resolution = this.resolveArtifact(sourceSlug);
         if (resolution.mode === "zip" && resolution.artifactPath) {
-            return this.readArtifactFile(resolution.artifactPath);
+            return this.readArtifactFile(resolution.artifactPath, sourceSlug, overrides);
         }
         if (resolution.mode === "project_directory" && resolution.sourcePath) {
             const artifactPath = await this.buildArtifactFromProjectDirectory(sourceSlug, resolution.sourcePath, overrides);
             return this.readArtifactFile(artifactPath);
         }
         if (resolution.mode === "github_archive" && resolution.github) {
-            const artifactPath = await this.buildArtifactFromGitHubArchive(sourceSlug, resolution.github, overrides);
-            return this.readArtifactFile(artifactPath);
+            try {
+                const artifactPath = await this.buildArtifactFromGitHubArchive(sourceSlug, resolution.github, overrides);
+                return this.readArtifactFile(artifactPath);
+            }
+            catch (error) {
+                const generatedZip = this.getGeneratedArtifactPath(sourceSlug);
+                if ((0, node_fs_1.existsSync)(generatedZip)) {
+                    return this.readArtifactFile(generatedZip);
+                }
+                const bundledZip = this.getBundledArtifactPath(sourceSlug);
+                if ((0, node_fs_1.existsSync)(bundledZip)) {
+                    return this.readArtifactFile(bundledZip);
+                }
+                throw error;
+            }
         }
         throw new Error(resolution.error ??
             `Artefato da source ${sourceSlug} nao encontrado. Configure um zip em ${this.artifactsDir}, defina SOURCE_PROJECT_DIR_${(0, utils_js_1.normalizeEnvKeyPart)(sourceSlug)} ou uma origem do GitHub.`);
     }
-    readArtifactFile(artifactPath) {
+    readArtifactFile(artifactPath, sourceSlug = null, overrides = {}) {
         const resolvedArtifactPath = (0, node_path_1.resolve)(artifactPath);
+        let fileBuffer = new Uint8Array((0, node_fs_1.readFileSync)(resolvedArtifactPath));
+        if (sourceSlug) {
+            const runtimeOptions = this.getRuntimeOptions(sourceSlug, overrides);
+            const archive = new AdmZip(Buffer.from(fileBuffer));
+            const existingConfig = archive.getEntry("squarecloud.app");
+            if (existingConfig) {
+                archive.deleteFile("squarecloud.app");
+            }
+            archive.addFile("squarecloud.app", Buffer.from(this.buildSquareCloudConfig(sourceSlug, runtimeOptions), "utf8"));
+            fileBuffer = new Uint8Array(archive.toBuffer());
+        }
         return {
             path: resolvedArtifactPath,
             fileName: (0, node_path_1.basename)(resolvedArtifactPath),
-            fileBuffer: new Uint8Array((0, node_fs_1.readFileSync)(resolvedArtifactPath)),
+            fileBuffer,
         };
     }
     async buildArtifactFromProjectDirectory(sourceSlug, projectDir, overrides) {
@@ -520,7 +547,14 @@ class SourceArtifactService {
             .replace(/^\/+|\/+$/g, "");
     }
     resolveConfiguredPath(pathValue) {
-        return pathValue ? (0, node_path_1.resolve)(pathValue) : null;
+        const normalizedValue = String(pathValue ?? "").trim();
+        if (!normalizedValue) {
+            return null;
+        }
+        if (process.platform !== "win32" && /^[a-z]:[\\/]/iu.test(normalizedValue)) {
+            return null;
+        }
+        return (0, node_path_1.resolve)(normalizedValue);
     }
 }
 exports.SourceArtifactService = SourceArtifactService;

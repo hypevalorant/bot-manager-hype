@@ -35,6 +35,9 @@ function readEnvFileAsBase64(pathEnvKeys, base64EnvKeys) {
     if (!configuredPath) {
         return "";
     }
+    if (process.platform !== "win32" && /^[a-z]:[\\/]/iu.test(configuredPath)) {
+        return "";
+    }
     const absolutePath = (0, node_path_1.resolve)(configuredPath);
     if (!(0, node_fs_1.existsSync)(absolutePath)) {
         return "";
@@ -143,12 +146,29 @@ class SquareCloudProvisioningService {
         const year = String(Number.isFinite(soldAt.getTime()) ? soldAt.getUTCFullYear() : 0);
         return `Aplicação ID ${sequenceLabel} - ${purchaserDiscordUserId} - ${day}-${month}-${year}`.slice(0, 120);
     }
+    buildManagedDisplayName(instance, discordApp) {
+        const rawBaseName = String(instance?.sourceSlug ?? "").trim() === "bot-ticket-hype"
+            ? "Bot Ticket Hype"
+            : String(discordApp?.appName ?? instance?.config?.discordAppName ?? "Bot Ticket Hype").trim() || "Bot Ticket Hype";
+        const baseName = rawBaseName.replace(/\s+Runtime$/iu, "").trim() || rawBaseName;
+        const rawUsername = String(instance?.config?.purchaserDiscordUsername ??
+            instance?.config?.customerDiscordUsername ??
+            instance?.config?.purchaserDiscordUserId ??
+            instance?.config?.commercialOwnerDiscordUserId ??
+            "").trim();
+        const username = (rawUsername || "cliente").replace(/^@+/u, "").replace(/[^a-zA-Z0-9]+/gu, "").slice(0, 12) || "cliente";
+        const expiresAt = new Date(String(instance?.expiresAt ?? "").trim() || Date.now());
+        const day = String(Number.isFinite(expiresAt.getTime()) ? expiresAt.getUTCDate() : 0).padStart(2, "0");
+        const month = String(Number.isFinite(expiresAt.getTime()) ? expiresAt.getUTCMonth() + 1 : 0).padStart(2, "0");
+        const year = String(Number.isFinite(expiresAt.getTime()) ? expiresAt.getUTCFullYear() : 0);
+        return `${baseName} ${username} ${day}${month}${year.slice(-2)}`.slice(0, 32);
+    }
     async provisionInstance(instance, discordApp) {
         if (!this.squareCloudClient.isConfigured()) {
             throw new Error("SquareCloud não configurada para provisionamento real.");
         }
         const overrides = {
-            displayName: discordApp.appName,
+            displayName: this.buildManagedDisplayName(instance, discordApp),
             description: this.buildManagedDescription(instance),
             artifactTag: instance.id,
         };
@@ -191,7 +211,7 @@ class SquareCloudProvisioningService {
             throw new Error("A instância ainda não possui uma app real para atualizar.");
         }
         const overrides = {
-            displayName: discordApp.appName,
+            displayName: this.buildManagedDisplayName(instance, discordApp),
             description: this.buildManagedDescription(instance),
             artifactTag: instance.id,
         };

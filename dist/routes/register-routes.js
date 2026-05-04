@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.registerRoutes = registerRoutes;
+const node_crypto_1 = require("node:crypto");
 const runtime_config_page_js_1 = require("../modules/admin/runtime-config.page.js");
 const security_js_1 = require("../core/security.js");
 const serializers_js_1 = require("../core/serializers.js");
@@ -37,6 +38,33 @@ function sendSecurityError(reply, error) {
         return reply.status(error.statusCode).send({ error: error.message });
     }
     return reply.status(500).send({ error: "Falha ao validar acesso." });
+}
+function secureEqual(left, right) {
+    const leftBuffer = Buffer.from(String(left ?? ""), "utf8");
+    const rightBuffer = Buffer.from(String(right ?? ""), "utf8");
+    if (leftBuffer.length === 0 || leftBuffer.length !== rightBuffer.length) {
+        return false;
+    }
+    return (0, node_crypto_1.timingSafeEqual)(leftBuffer, rightBuffer);
+}
+function requireProvisioningWorkerAccess(request) {
+    const workerToken = String(process.env.PROVISIONING_WORKER_TOKEN ?? process.env.EXTERNAL_PROVISIONING_TOKEN ?? "").trim();
+    const adminToken = String(process.env.ADMIN_API_TOKEN ?? "").trim();
+    const expectedToken = workerToken || adminToken;
+    if (!expectedToken) {
+        if (String(process.env.NODE_ENV ?? "").trim().toLowerCase() === "production") {
+            throw new security_js_1.SecurityError("PROVISIONING_WORKER_TOKEN ou ADMIN_API_TOKEN nao configurado.", 503);
+        }
+        return { scope: "development_bypass" };
+    }
+    const authorization = String(request.headers.authorization ?? "").trim();
+    const bearerToken = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length).trim() : "";
+    const headerToken = String(request.headers["x-provisioning-worker-token"] ?? request.headers["x-admin-token"] ?? "").trim();
+    const queryToken = String(request.query?.token ?? "").trim();
+    if ([bearerToken, headerToken, queryToken].some((token) => token && secureEqual(token, expectedToken))) {
+        return { scope: workerToken ? "provisioning_worker" : "admin" };
+    }
+    throw new security_js_1.SecurityError("Token do worker de provisionamento invalido ou ausente.", 401);
 }
 function enforceAdmin(request) {
     return (0, security_js_1.requireAdminAccess)(request);
@@ -383,6 +411,11 @@ async function registerRoutes(app, services) {
             return reply.status(400).send({ error: error.message });
         }
     });
+    app.get("/webhooks/efipay", async (_request, reply) => reply.send({
+        ok: true,
+        service: "efi-webhook",
+        accepts: ["/webhooks/efipay", "/webhooks/efipay/pix"],
+    }));
     app.post("/webhooks/efipay", async (request, reply) => {
         const query = request.query;
         if (!services.billingService.validateEfipayWebhookHmac(query.hmac)) {
@@ -391,12 +424,17 @@ async function registerRoutes(app, services) {
         try {
             const result = await services.billingService.handleEfipayWebhook(request.body);
             await syncApprovedPaymentsToManager(result, services);
-            return reply.status(202).send(result);
+            return reply.status(200).send(result);
         }
         catch (error) {
             return reply.status(400).send({ error: error.message });
         }
     });
+    app.get("/webhooks/efipay/pix", async (_request, reply) => reply.send({
+        ok: true,
+        service: "efi-webhook",
+        accepts: ["/webhooks/efipay", "/webhooks/efipay/pix"],
+    }));
     app.post("/webhooks/efipay/pix", async (request, reply) => {
         const query = request.query;
         if (!services.billingService.validateEfipayWebhookHmac(query.hmac)) {
@@ -405,7 +443,7 @@ async function registerRoutes(app, services) {
         try {
             const result = await services.billingService.handleEfipayWebhook(request.body);
             await syncApprovedPaymentsToManager(result, services);
-            return reply.status(202).send(result);
+            return reply.status(200).send(result);
         }
         catch (error) {
             return reply.status(400).send({ error: error.message });
@@ -651,6 +689,187 @@ async function registerRoutes(app, services) {
         catch (error) {
             return reply.status(401).send({ error: error.message });
         }
+    });
+    app.post("/internal/provisioning/jobs/claim", async (request, reply) => {
+        try {
+            requireProvisioningWorkerAccess(request);
+        }
+        catch (error) {
+            return sendSecurityError(reply, error);
+        }
+        const body = request.body ?? {};
+        const workerId = String(body.workerId ?? request.headers["x-worker-id"] ?? "worker").trim().slice(0, 80) || "worker";
+        const now = Date.now();
+        const jobs = Array.isArray(services.store.provisioningJobs) ? services.store.provisioningJobs : [];
+        services.store.provisioningJobs = jobs;
+        const activeInstanceIds = new Set(jobs
+            .filter((entry) => ["queued", "retry", "processing"].includes(String(entry?.status ?? "").toLowerCase()))
+            .map((entry) => String(entry.instanceId ?? "").trim())
+            .filter(Boolean));
+        for (const instance of Array.isArray(services.store.instances) ? services.store.instances : []) {
+            const hostingAppId = String(instance?.hostingAppId ?? "").trim();
+            const status = String(instance?.status ?? "").trim().toLowerCase();
+            if (!hostingAppId.startsWith("pending-") || activeInstanceIds.has(instance.id) || !["queued", "failed", "provisioning"].includes(status)) {
+                continue;
+            }
+            const discordApp = services.store.discordApps.find((entry) => entry.id === instance.discordAppId);
+            if (!discordApp?.botToken) {
+                continue;
+            }
+            const createdAt = new Date().toISOString();
+            jobs.push({
+                id: (0, utils_js_1.makeId)(),
+                type: "squarecloud_provision",
+                instanceId: instance.id,
+                discordAppId: discordApp.id,
+                sourceSlug: instance.sourceSlug,
+                status: "queued",
+                attempts: 0,
+                maxAttempts: Number(process.env.PROVISIONING_WORKER_MAX_ATTEMPTS ?? 8) || 8,
+                lockedBy: null,
+                lockedAt: null,
+                lockExpiresAt: null,
+                lastError: null,
+                result: null,
+                reason: "recovered_pending_instance",
+                nextRunAt: createdAt,
+                createdAt,
+                updatedAt: createdAt,
+            });
+            activeInstanceIds.add(instance.id);
+            instance.status = "queued";
+            instance.updatedAt = createdAt;
+        }
+        const job = jobs
+            .filter((entry) => ["queued", "retry", "processing"].includes(String(entry?.status ?? "").toLowerCase()))
+            .filter((entry) => {
+            const nextRunAt = Date.parse(String(entry.nextRunAt ?? entry.createdAt ?? 0)) || 0;
+            const lockExpiresAt = Date.parse(String(entry.lockExpiresAt ?? 0)) || 0;
+            const status = String(entry.status ?? "").toLowerCase();
+            return nextRunAt <= now && (status !== "processing" || lockExpiresAt <= now);
+        })
+            .sort((left, right) => Date.parse(String(left.nextRunAt ?? left.createdAt ?? 0)) - Date.parse(String(right.nextRunAt ?? right.createdAt ?? 0)))[0];
+        if (!job) {
+            return reply.send({ ok: true, job: null });
+        }
+        const instance = services.instanceService.getById(job.instanceId);
+        const discordApp = services.store.discordApps.find((entry) => entry.id === job.discordAppId || entry.id === instance?.discordAppId);
+        if (!instance || !discordApp) {
+            job.status = "failed";
+            job.lastError = "Instancia ou app Discord nao encontrado para provisionamento.";
+            job.updatedAt = new Date().toISOString();
+            await services.store.flush?.().catch(() => null);
+            return reply.status(409).send({ ok: false, error: job.lastError });
+        }
+        const lockTtlSeconds = Math.max(60, Number(body.lockTtlSeconds ?? process.env.PROVISIONING_WORKER_LOCK_TTL_SECONDS ?? 900) || 900);
+        const lockedAt = new Date();
+        job.status = "processing";
+        job.attempts = Math.max(0, Number(job.attempts ?? 0) || 0) + 1;
+        job.lockedBy = workerId;
+        job.lockedAt = lockedAt.toISOString();
+        job.lockExpiresAt = new Date(lockedAt.getTime() + lockTtlSeconds * 1000).toISOString();
+        job.updatedAt = job.lockedAt;
+        instance.status = "queued";
+        instance.updatedAt = job.updatedAt;
+        await services.store.flush?.().catch(() => null);
+        return reply.send({
+            ok: true,
+            job,
+            instance,
+            discordApp,
+            runtimeSourceConfig: services.managerRuntimeConfigService.getRuntimeSourceConfig(instance.sourceSlug) ?? null,
+            managerApiUrl: services.managerRuntimeConfigService.getResolvedAppBaseUrl(request) ?? null,
+        });
+    });
+    app.post("/internal/provisioning/jobs/:jobId/complete", async (request, reply) => {
+        try {
+            requireProvisioningWorkerAccess(request);
+        }
+        catch (error) {
+            return sendSecurityError(reply, error);
+        }
+        const { jobId } = request.params;
+        const body = request.body ?? {};
+        const job = Array.isArray(services.store.provisioningJobs)
+            ? services.store.provisioningJobs.find((entry) => entry.id === jobId)
+            : null;
+        if (!job) {
+            return reply.status(404).send({ error: "Job de provisionamento nao encontrado." });
+        }
+        const instance = services.instanceService.getById(job.instanceId);
+        if (!instance) {
+            return reply.status(404).send({ error: "Instancia do job nao encontrada." });
+        }
+        const appId = String(body.appId ?? body.hostingAppId ?? "").trim();
+        if (!appId) {
+            return reply.status(400).send({ error: "appId e obrigatorio." });
+        }
+        const now = new Date().toISOString();
+        instance.hostingAppId = appId;
+        instance.status = body.instanceStatus ? String(body.instanceStatus).trim() : "provisioning";
+        instance.updatedAt = now;
+        instance.config = {
+            ...(instance.config ?? {}),
+            provisioningCompletedAt: now,
+            provisioningQueueJobId: job.id,
+            lastProvisioningError: null,
+            lastProvisioningErrorAt: null,
+        };
+        const discordApp = services.store.discordApps.find((entry) => entry.id === instance.discordAppId);
+        if (discordApp) {
+            discordApp.poolStatus = "allocated";
+            discordApp.updatedAt = now;
+        }
+        job.status = "completed";
+        job.result = {
+            appId,
+            upload: body.upload ?? null,
+            boot: body.boot ?? null,
+        };
+        job.completedAt = now;
+        job.updatedAt = now;
+        job.lockExpiresAt = null;
+        await services.store.flush?.().catch(() => null);
+        return reply.send({ ok: true, job, instance: (0, serializers_js_1.sanitizeInstance)(instance, { includeConfig: true }) });
+    });
+    app.post("/internal/provisioning/jobs/:jobId/fail", async (request, reply) => {
+        try {
+            requireProvisioningWorkerAccess(request);
+        }
+        catch (error) {
+            return sendSecurityError(reply, error);
+        }
+        const { jobId } = request.params;
+        const body = request.body ?? {};
+        const job = Array.isArray(services.store.provisioningJobs)
+            ? services.store.provisioningJobs.find((entry) => entry.id === jobId)
+            : null;
+        if (!job) {
+            return reply.status(404).send({ error: "Job de provisionamento nao encontrado." });
+        }
+        const now = new Date();
+        const attempts = Math.max(0, Number(job.attempts ?? 0) || 0);
+        const maxAttempts = Math.max(1, Number(job.maxAttempts ?? process.env.PROVISIONING_WORKER_MAX_ATTEMPTS ?? 8) || 8);
+        const retry = body.retry !== false && attempts < maxAttempts;
+        const delaySeconds = Math.max(10, Number(body.retryDelaySeconds ?? Math.min(900, 30 * Math.max(1, attempts))) || 30);
+        job.status = retry ? "retry" : "failed";
+        job.lastError = String(body.error ?? "Falha no worker de provisionamento.").slice(0, 1500);
+        job.lockExpiresAt = null;
+        job.updatedAt = now.toISOString();
+        job.nextRunAt = retry ? new Date(now.getTime() + delaySeconds * 1000).toISOString() : null;
+        const instance = services.instanceService.getById(job.instanceId);
+        if (instance) {
+            instance.status = retry ? "queued" : "failed";
+            instance.updatedAt = job.updatedAt;
+            instance.config = {
+                ...(instance.config ?? {}),
+                lastProvisioningError: job.lastError,
+                lastProvisioningErrorAt: job.updatedAt,
+                provisioningQueueJobId: job.id,
+            };
+        }
+        await services.store.flush?.().catch(() => null);
+        return reply.send({ ok: true, retry, job });
     });
     app.get("/hosting/squarecloud/apps/:appId/status", async (request, reply) => {
         const { appId } = request.params;

@@ -215,6 +215,113 @@ class InstanceService {
             update,
         };
     }
+    isExternalProvisioningEnabled() {
+        const mode = String(process.env.SQUARECLOUD_PROVISIONING_MODE ?? process.env.PROVISIONING_MODE ?? "").trim().toLowerCase();
+        if (["external", "worker", "queue", "queued"].includes(mode)) {
+            return true;
+        }
+        return String(process.env.EXTERNAL_PROVISIONING_ENABLED ?? "").trim().toLowerCase() === "true";
+    }
+    isExternalProvisioningFallbackError(error) {
+        const status = Number(error?.status ?? 0) || 0;
+        const path = String(error?.path ?? "").trim();
+        const message = String(error?.message ?? error ?? "").toLowerCase();
+        return (path === "/apps" || message.includes("para /apps")) &&
+            (status === 520 ||
+                status === 502 ||
+                status === 503 ||
+                message.includes("cloudflare") ||
+                message.includes("unable to proceed") ||
+                message.includes("respondeu 520"));
+    }
+    enqueueProvisioningJob(instance, app, reason = "queued") {
+        if (!Array.isArray(this.store.provisioningJobs)) {
+            this.store.provisioningJobs = [];
+        }
+        const now = (0, utils_js_1.nowIso)();
+        const existing = this.store.provisioningJobs.find((job) => job.instanceId === instance.id &&
+            ["queued", "processing", "retry"].includes(String(job.status ?? "").toLowerCase()));
+        const job = existing ?? {
+            id: (0, utils_js_1.makeId)(),
+            type: "squarecloud_provision",
+            instanceId: instance.id,
+            discordAppId: app.id,
+            sourceSlug: instance.sourceSlug,
+            status: "queued",
+            attempts: 0,
+            maxAttempts: Number(process.env.PROVISIONING_WORKER_MAX_ATTEMPTS ?? 8) || 8,
+            lockedBy: null,
+            lockedAt: null,
+            lockExpiresAt: null,
+            lastError: null,
+            result: null,
+            nextRunAt: now,
+            createdAt: now,
+            updatedAt: now,
+        };
+        job.discordAppId = app.id;
+        job.sourceSlug = instance.sourceSlug;
+        job.status = "queued";
+        job.reason = reason;
+        job.nextRunAt = now;
+        job.updatedAt = now;
+        if (!existing) {
+            this.store.provisioningJobs.push(job);
+        }
+        instance.status = "queued";
+        instance.updatedAt = now;
+        instance.config = {
+            ...(instance.config ?? {}),
+            provisioningQueuedAt: now,
+            provisioningQueueJobId: job.id,
+            provisioningQueueReason: reason,
+        };
+        return job;
+    }
+    async triggerProvisioningWorker(job) {
+        const repo = String(process.env.PROVISIONING_GITHUB_REPO ?? "").trim();
+        const token = String(process.env.PROVISIONING_GITHUB_TOKEN ?? process.env.GH_TOKEN ?? "").trim();
+        const workflow = String(process.env.PROVISIONING_GITHUB_WORKFLOW ?? "provisioning-worker.yml").trim();
+        const ref = String(process.env.PROVISIONING_GITHUB_REF ?? "main").trim();
+        if (!repo || !token || !workflow || !ref) {
+            return false;
+        }
+        const response = await fetch(`https://api.github.com/repos/${repo}/actions/workflows/${encodeURIComponent(workflow)}/dispatches`, {
+            method: "POST",
+            headers: {
+                Accept: "application/vnd.github+json",
+                Authorization: `Bearer ${token}`,
+                "Content-Type": "application/json",
+                "User-Agent": "bot-manager-hype",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            body: JSON.stringify({
+                ref,
+                inputs: {
+                    job_id: String(job?.id ?? ""),
+                    instance_id: String(job?.instanceId ?? ""),
+                    reason: String(job?.reason ?? "queued"),
+                },
+            }),
+        });
+        const now = (0, utils_js_1.nowIso)();
+        if (job && typeof job === "object") {
+            job.lastDispatchAt = now;
+            job.lastDispatchStatus = response.ok ? "dispatched" : "failed";
+            job.updatedAt = now;
+        }
+        if (!response.ok) {
+            const body = await response.text().catch(() => "");
+            if (job && typeof job === "object") {
+                job.lastDispatchError = `GitHub ${response.status}: ${body.slice(0, 700)}`;
+            }
+            return false;
+        }
+        if (job && typeof job === "object") {
+            job.lastDispatchError = null;
+        }
+        return true;
+    }
     heartbeat(instanceId, instanceSecret, metrics) {
         const instance = this.getById(instanceId);
         if (!instance || instance.instanceSecret !== instanceSecret) {
@@ -340,6 +447,11 @@ class InstanceService {
             instance.updatedAt = (0, utils_js_1.nowIso)();
             return instance;
         }
+        if (this.isExternalProvisioningEnabled()) {
+            const job = this.enqueueProvisioningJob(instance, app, "external_worker_mode");
+            await this.triggerProvisioningWorker(job).catch(() => false);
+            return instance;
+        }
         try {
             const hasRealHostingApp = Boolean(instance.hostingAppId) && !String(instance.hostingAppId).startsWith("pending-");
             const provisioning = hasRealHostingApp
@@ -351,12 +463,28 @@ class InstanceService {
             return instance;
         }
         catch (error) {
+            if (this.isExternalProvisioningFallbackError(error)) {
+                const job = this.enqueueProvisioningJob(instance, app, "squarecloud_upload_blocked");
+                await this.triggerProvisioningWorker(job).catch(() => false);
+                if (typeof this.store?.flush === "function") {
+                    await this.store.flush().catch(() => null);
+                }
+                return instance;
+            }
             const partialAppId = String(error?.squareCloudAppId ?? "").trim();
             if (partialAppId) {
                 instance.hostingAppId = partialAppId;
             }
             instance.status = "failed";
             instance.updatedAt = (0, utils_js_1.nowIso)();
+            instance.config = {
+                ...(instance.config ?? {}),
+                lastProvisioningError: String(error?.message ?? error ?? "Falha no provisionamento.").slice(0, 1000),
+                lastProvisioningErrorAt: instance.updatedAt,
+            };
+            if (typeof this.store?.flush === "function") {
+                await this.store.flush().catch(() => null);
+            }
             this.appPoolService.release(instance.discordAppId);
             throw error;
         }

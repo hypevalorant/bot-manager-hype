@@ -7,6 +7,7 @@
     "dev": "node --watch dist/server.js",
     "build": "node scripts/verify-runtime.js",
     "start": "node dist/server.js",
+    "worker:provisioning": "node scripts/provisioning-worker.js",
     "package:squarecloud": "powershell -ExecutionPolicy Bypass -File scripts/package-squarecloud.ps1"
   },
   "dependencies": {
