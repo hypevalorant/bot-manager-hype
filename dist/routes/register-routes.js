@@ -129,6 +129,10 @@ function assertProductReadyForCheckout(productSlug, services) {
         throw new Error(saleStatus.blockedReason ?? "Produto temporariamente indisponivel para novas vendas.");
     }
 }
+function shouldHideCustomerAppBundle(bundle) {
+    const instanceStatus = String(bundle?.instance?.status ?? "").trim().toLowerCase();
+    return instanceStatus === "deleted";
+}
 async function registerRoutes(app, services) {
     app.get("/admin/runtime-config", async (_request, reply) => reply
         .type("text/html; charset=utf-8")
@@ -253,7 +257,10 @@ async function registerRoutes(app, services) {
             return sendSecurityError(reply, error);
         }
         const { discordUserId } = request.params;
-        return reply.send(services.subscriptionService.listByDiscordUserId(discordUserId).map((bundle) => (0, serializers_js_1.sanitizeSubscriptionBundle)(bundle, {
+        return reply.send(services.subscriptionService
+            .listByDiscordUserId(discordUserId)
+            .filter((bundle) => !shouldHideCustomerAppBundle(bundle))
+            .map((bundle) => (0, serializers_js_1.sanitizeSubscriptionBundle)(bundle, {
             includeInstanceConfig: false,
         })));
     });
@@ -629,6 +636,10 @@ async function registerRoutes(app, services) {
                 };
             }
             catch (error) {
+                if (services.instanceService.isInaccessibleSquareCloudAppError?.(error)) {
+                    await services.instanceService.markSquareCloudAppDeleted(instance, error.message);
+                    return reply.status(404).send({ error: "Instancia removida da SquareCloud e sincronizada no manager." });
+                }
                 squareCloud = {
                     error: error.message,
                 };
@@ -699,6 +710,8 @@ async function registerRoutes(app, services) {
         }
         const body = request.body ?? {};
         const workerId = String(body.workerId ?? request.headers["x-worker-id"] ?? "worker").trim().slice(0, 80) || "worker";
+        const requestedJobId = String(body.jobId ?? "").trim();
+        const requestedInstanceId = String(body.instanceId ?? "").trim();
         const now = Date.now();
         const jobs = Array.isArray(services.store.provisioningJobs) ? services.store.provisioningJobs : [];
         services.store.provisioningJobs = jobs;
@@ -742,11 +755,18 @@ async function registerRoutes(app, services) {
         }
         const job = jobs
             .filter((entry) => ["queued", "retry", "processing"].includes(String(entry?.status ?? "").toLowerCase()))
+            .filter((entry) => !requestedJobId || entry.id === requestedJobId)
+            .filter((entry) => !requestedInstanceId || entry.instanceId === requestedInstanceId)
             .filter((entry) => {
             const nextRunAt = Date.parse(String(entry.nextRunAt ?? entry.createdAt ?? 0)) || 0;
             const lockExpiresAt = Date.parse(String(entry.lockExpiresAt ?? 0)) || 0;
             const status = String(entry.status ?? "").toLowerCase();
             return nextRunAt <= now && (status !== "processing" || lockExpiresAt <= now);
+        })
+            .filter((entry) => {
+            const instance = services.instanceService.getById(entry.instanceId);
+            const status = String(instance?.status ?? "").trim().toLowerCase();
+            return instance && !["deleted", "suspended"].includes(status);
         })
             .sort((left, right) => Date.parse(String(left.nextRunAt ?? left.createdAt ?? 0)) - Date.parse(String(right.nextRunAt ?? right.createdAt ?? 0)))[0];
         if (!job) {
@@ -914,6 +934,113 @@ async function registerRoutes(app, services) {
         await services.store.flush?.().catch(() => null);
         return reply.send({ ok: true, job, instance: (0, serializers_js_1.sanitizeInstance)(instance, { includeConfig: true }) });
     });
+    app.post("/internal/provisioning/run-now", async (request, reply) => {
+        try {
+            requireProvisioningWorkerAccess(request);
+        }
+        catch (error) {
+            return sendSecurityError(reply, error);
+        }
+        const body = request.body ?? {};
+        const instanceId = String(body.instanceId ?? "").trim();
+        const jobId = String(body.jobId ?? "").trim();
+        const jobs = Array.isArray(services.store.provisioningJobs) ? services.store.provisioningJobs : [];
+        const job = jobId
+            ? jobs.find((entry) => entry.id === jobId)
+            : jobs
+                .filter((entry) => entry.instanceId === instanceId && ["queued", "retry", "processing"].includes(String(entry.status ?? "").toLowerCase()))
+                .sort((left, right) => Date.parse(String(right.updatedAt ?? right.createdAt ?? 0)) - Date.parse(String(left.updatedAt ?? left.createdAt ?? 0)))[0];
+        const instance = services.instanceService.getById(instanceId || job?.instanceId);
+        if (!instance) {
+            return reply.status(404).send({ error: "Instancia nao encontrada para provisionar agora." });
+        }
+        const discordApp = services.store.discordApps.find((entry) => entry.id === instance.discordAppId);
+        if (!discordApp?.botToken) {
+            return reply.status(409).send({ error: "Instancia nao possui app Discord com token salvo." });
+        }
+        if (!services.squareCloudProvisioningService?.isConfigured?.()) {
+            return reply.status(503).send({ error: "SquareCloud nao configurada para provisionamento direto." });
+        }
+        const now = new Date().toISOString();
+        const activeJob = job ?? {
+            id: (0, utils_js_1.makeId)(),
+            type: "squarecloud_provision",
+            instanceId: instance.id,
+            discordAppId: discordApp.id,
+            sourceSlug: instance.sourceSlug,
+            status: "queued",
+            attempts: 0,
+            maxAttempts: Number(process.env.PROVISIONING_WORKER_MAX_ATTEMPTS ?? 8) || 8,
+            lockedBy: null,
+            lockedAt: null,
+            lockExpiresAt: null,
+            lastError: null,
+            result: null,
+            reason: String(body.reason ?? "direct_manager_run").trim().slice(0, 120) || "direct_manager_run",
+            nextRunAt: now,
+            createdAt: now,
+            updatedAt: now,
+        };
+        if (!job) {
+            jobs.push(activeJob);
+            services.store.provisioningJobs = jobs;
+        }
+        activeJob.status = "processing";
+        activeJob.lockedBy = "manager-api";
+        activeJob.lockedAt = now;
+        activeJob.lockExpiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+        activeJob.attempts = Math.max(0, Number(activeJob.attempts ?? 0) || 0) + 1;
+        activeJob.updatedAt = now;
+        instance.status = "provisioning";
+        instance.updatedAt = now;
+        await services.store.flush?.().catch(() => null);
+        try {
+            const hasRealHostingApp = Boolean(instance.hostingAppId) && !String(instance.hostingAppId).startsWith("pending-");
+            const result = hasRealHostingApp
+                ? await services.squareCloudProvisioningService.updateInstance(instance, discordApp)
+                : await services.squareCloudProvisioningService.provisionInstance(instance, discordApp);
+            const completedAt = new Date().toISOString();
+            instance.hostingAppId = result.appId;
+            instance.status = result.boot?.running ? "running" : "provisioning";
+            instance.updatedAt = completedAt;
+            instance.config = {
+                ...(instance.config ?? {}),
+                provisioningCompletedAt: completedAt,
+                provisioningQueueJobId: activeJob.id,
+                lastProvisioningError: null,
+                lastProvisioningErrorAt: null,
+            };
+            activeJob.status = "completed";
+            activeJob.result = {
+                appId: result.appId,
+                upload: result.upload ?? result.commit ?? null,
+                boot: result.boot ?? null,
+            };
+            activeJob.completedAt = completedAt;
+            activeJob.updatedAt = completedAt;
+            activeJob.lockExpiresAt = null;
+            await services.store.flush?.().catch(() => null);
+            return reply.send({ ok: true, job: activeJob, instance: (0, serializers_js_1.sanitizeInstance)(instance, { includeConfig: true }) });
+        }
+        catch (error) {
+            const failedAt = new Date().toISOString();
+            activeJob.status = "retry";
+            activeJob.lastError = String(error?.message ?? error ?? "Falha no provisionamento direto.").slice(0, 1500);
+            activeJob.lockExpiresAt = null;
+            activeJob.nextRunAt = failedAt;
+            activeJob.updatedAt = failedAt;
+            instance.status = "queued";
+            instance.updatedAt = failedAt;
+            instance.config = {
+                ...(instance.config ?? {}),
+                lastProvisioningError: activeJob.lastError,
+                lastProvisioningErrorAt: failedAt,
+                provisioningQueueJobId: activeJob.id,
+            };
+            await services.store.flush?.().catch(() => null);
+            return reply.status(502).send({ error: activeJob.lastError, job: activeJob, instance: (0, serializers_js_1.sanitizeInstance)(instance, { includeConfig: true }) });
+        }
+    });
     app.post("/internal/provisioning/jobs/:jobId/complete", async (request, reply) => {
         try {
             requireProvisioningWorkerAccess(request);
@@ -939,7 +1066,8 @@ async function registerRoutes(app, services) {
         }
         const now = new Date().toISOString();
         instance.hostingAppId = appId;
-        instance.status = body.instanceStatus ? String(body.instanceStatus).trim() : "provisioning";
+        const bootRunning = body.boot?.running === true || body.boot?.ok === true;
+        instance.status = body.instanceStatus ? String(body.instanceStatus).trim() : (bootRunning ? "running" : "provisioning");
         instance.updatedAt = now;
         instance.config = {
             ...(instance.config ?? {}),
