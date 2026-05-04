@@ -2,6 +2,45 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.InstanceService = void 0;
 const utils_js_1 = require("../../core/utils.js");
+function isInaccessibleSquareCloudAppError(error) {
+    const status = Number(error?.status ?? 0) || 0;
+    const code = String(error?.code ?? "").trim().toUpperCase();
+    const message = String(error?.message ?? error ?? "").toUpperCase();
+    return status === 404 ||
+        status === 401 ||
+        status === 403 ||
+        code === "NOT_FOUND" ||
+        code === "APP_NOT_FOUND" ||
+        code === "ACCESS_DENIED" ||
+        message.includes("APP_NOT_FOUND") ||
+        message.includes("ACCESS_DENIED") ||
+        message.includes("INVALID USER DATA") ||
+        message.includes("NAO ENCONTRADA") ||
+        message.includes("NÃO ENCONTRADA") ||
+        message.includes("NOT FOUND");
+}
+function shouldReviveDeletedInstanceFromHeartbeat(instance, subscription) {
+    const status = String(instance?.status ?? "").trim().toLowerCase();
+    if (status !== "deleted") {
+        return false;
+    }
+    const subscriptionStatus = String(subscription?.status ?? "").trim().toLowerCase();
+    if (["cancelled", "deleted", "expired", "suspended"].includes(subscriptionStatus)) {
+        return false;
+    }
+    const expiresAt = Date.parse(String(instance?.expiresAt ?? subscription?.currentPeriodEnd ?? ""));
+    if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) {
+        return false;
+    }
+    const reason = String(instance?.config?.squareCloudDeletedReason ?? "").toLowerCase();
+    return !reason ||
+        reason.includes("square cloud respondeu 401") ||
+        reason.includes("square cloud respondeu 403") ||
+        reason.includes("access_denied") ||
+        reason.includes("invalid user data") ||
+        reason.includes("inacessivel") ||
+        reason.includes("inacessível");
+}
 class InstanceService {
     store;
     appPoolService;
@@ -128,6 +167,37 @@ class InstanceService {
     getByHostingAppId(hostingAppId) {
         return this.store.instances.find((instance) => instance.hostingAppId === hostingAppId) ?? null;
     }
+    isInaccessibleSquareCloudAppError(error) {
+        return isInaccessibleSquareCloudAppError(error);
+    }
+    isSquareCloudAppNotFoundError(error) {
+        return isInaccessibleSquareCloudAppError(error);
+    }
+    async markSquareCloudAppDeleted(instanceOrHostingAppId, reason = null) {
+        const instance = typeof instanceOrHostingAppId === "string"
+            ? this.getByHostingAppId(instanceOrHostingAppId)
+            : instanceOrHostingAppId;
+        if (!instance) {
+            return null;
+        }
+        const timestamp = (0, utils_js_1.nowIso)();
+        instance.status = "deleted";
+        instance.updatedAt = timestamp;
+        instance.config = {
+            ...(instance.config ?? {}),
+            squareCloudDeletedAt: timestamp,
+            squareCloudDeletedReason: String(reason ?? "SquareCloud app removida ou inacessivel.").slice(0, 1000),
+        };
+        this.appPoolService.release(instance.discordAppId);
+        const discordApp = this.store.discordApps.find((entry) => entry.id === instance.discordAppId);
+        if (discordApp && discordApp.source === "customer_token") {
+            discordApp.poolStatus = "disabled";
+        }
+        if (typeof this.store?.flush === "function") {
+            await this.store.flush().catch(() => null);
+        }
+        return instance;
+    }
     setAssignedGuild(instanceId, guildId) {
         const instance = this.getById(instanceId);
         if (!instance) {
@@ -177,7 +247,19 @@ class InstanceService {
             return null;
         }
         if (this.provisioningService?.isConfigured() && !instance.hostingAppId.startsWith("pending-")) {
-            await this.provisioningService.deleteInstance(instance);
+            try {
+                await this.provisioningService.deleteInstance(instance);
+            }
+            catch (error) {
+                if (!isInaccessibleSquareCloudAppError(error)) {
+                    throw error;
+                }
+                instance.config = {
+                    ...(instance.config ?? {}),
+                    squareCloudDeletedAt: (0, utils_js_1.nowIso)(),
+                    squareCloudDeletedReason: "Delete solicitado pelo usuario; app SquareCloud ja estava inacessivel ou removida.",
+                };
+            }
         }
         instance.status = "deleted";
         instance.updatedAt = (0, utils_js_1.nowIso)();
@@ -221,6 +303,10 @@ class InstanceService {
             return true;
         }
         return String(process.env.EXTERNAL_PROVISIONING_ENABLED ?? "").trim().toLowerCase() === "true";
+    }
+    isExternalProvisioningOnly() {
+        const mode = String(process.env.SQUARECLOUD_PROVISIONING_MODE ?? process.env.PROVISIONING_MODE ?? "").trim().toLowerCase();
+        return ["external_only", "worker_only", "queue_only", "queued_only"].includes(mode);
     }
     isExternalProvisioningFallbackError(error) {
         const status = Number(error?.status ?? 0) || 0;
@@ -332,7 +418,16 @@ class InstanceService {
             throw new Error("Assinatura da instância não encontrada.");
         }
         instance.lastHeartbeatAt = (0, utils_js_1.nowIso)();
-        if (["provisioning", "starting", "active"].includes(String(instance.status ?? "").toLowerCase())) {
+        if (shouldReviveDeletedInstanceFromHeartbeat(instance, subscription)) {
+            instance.status = "running";
+            instance.config = {
+                ...(instance.config ?? {}),
+                squareCloudDeletedAt: null,
+                squareCloudDeletedReason: null,
+                falseDeletionRecoveredAt: instance.lastHeartbeatAt,
+            };
+        }
+        if (["provisioning", "starting", "active", "failed", "queued", "retry", "processing"].includes(String(instance.status ?? "").toLowerCase())) {
             instance.status = "running";
         }
         instance.updatedAt = instance.lastHeartbeatAt;
@@ -447,7 +542,7 @@ class InstanceService {
             instance.updatedAt = (0, utils_js_1.nowIso)();
             return instance;
         }
-        if (this.isExternalProvisioningEnabled()) {
+        if (this.isExternalProvisioningOnly()) {
             const job = this.enqueueProvisioningJob(instance, app, "external_worker_mode");
             await this.triggerProvisioningWorker(job).catch(() => false);
             return instance;
@@ -474,6 +569,18 @@ class InstanceService {
             const partialAppId = String(error?.squareCloudAppId ?? "").trim();
             if (partialAppId) {
                 instance.hostingAppId = partialAppId;
+                instance.status = "provisioning";
+                instance.updatedAt = (0, utils_js_1.nowIso)();
+                instance.config = {
+                    ...(instance.config ?? {}),
+                    lastProvisioningWarning: String(error?.message ?? error ?? "A SquareCloud criou a app, mas o boot automatico ainda nao confirmou execucao.").slice(0, 1000),
+                    lastProvisioningWarningAt: instance.updatedAt,
+                    partialProvisioningSavedAt: instance.updatedAt,
+                };
+                if (typeof this.store?.flush === "function") {
+                    await this.store.flush().catch(() => null);
+                }
+                return instance;
             }
             instance.status = "failed";
             instance.updatedAt = (0, utils_js_1.nowIso)();

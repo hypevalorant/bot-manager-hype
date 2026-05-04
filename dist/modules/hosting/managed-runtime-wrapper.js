@@ -2,7 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.buildManagedRuntimeWrapperSource = buildManagedRuntimeWrapperSource;
 function buildManagedRuntimeWrapperSource() {
-    return String.raw `const { spawn } = require("node:child_process");
+    return String.raw `const { spawn, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 
@@ -183,6 +183,58 @@ function resolveEntrypoint() {
   return path.resolve(process.cwd(), "index.js");
 }
 
+function collectDeclaredDependencies() {
+  try {
+    const pkg = require(path.join(process.cwd(), "package.json"));
+    return Object.keys(pkg?.dependencies && typeof pkg.dependencies === "object" ? pkg.dependencies : {});
+  } catch {
+    return [];
+  }
+}
+
+function findMissingDependencies() {
+  return collectDeclaredDependencies().filter((dependencyName) => {
+    try {
+      require.resolve(dependencyName, { paths: [process.cwd()] });
+      return false;
+    } catch {
+      return true;
+    }
+  });
+}
+
+function ensureRuntimeDependencies() {
+  const missingDependencies = findMissingDependencies();
+  if (missingDependencies.length === 0) {
+    return;
+  }
+
+  printSection("Instalando dependencias da aplicacao vendida", [
+    "Dependencias ausentes: " + missingDependencies.join(", "),
+    "Comando: npm install --omit=dev",
+  ]);
+
+  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+  const install = spawnSync(npmCommand, ["install", "--omit=dev"], {
+    cwd: process.cwd(),
+    env: process.env,
+    stdio: "inherit",
+  });
+
+  if (install.error) {
+    throw install.error;
+  }
+
+  if (install.status !== 0) {
+    throw new Error("npm install --omit=dev falhou com codigo " + formatValue(install.status, "desconhecido") + ".");
+  }
+
+  const stillMissing = findMissingDependencies();
+  if (stillMissing.length > 0) {
+    throw new Error("Dependencias ainda ausentes apos npm install: " + stillMissing.join(", "));
+  }
+}
+
 function syncBootstrapEnv(bootstrap) {
   process.env.INSTANCE_STATUS = String(bootstrap?.instance?.status || "");
   process.env.INSTANCE_EXPIRES_AT = String(bootstrap?.instance?.expiresAt || "");
@@ -206,6 +258,49 @@ function syncBootstrapEnv(bootstrap) {
   process.env.TENANT_SALE_SEQUENCE_NUMBER = String(bootstrap?.instance?.saleSequenceNumber || process.env.TENANT_SALE_SEQUENCE_NUMBER || "");
   process.env.TENANT_SOLD_AT = String(bootstrap?.instance?.soldAt || process.env.TENANT_SOLD_AT || "");
   process.env.SQUARECLOUD_DESCRIPTION = String(bootstrap?.instance?.managedDescription || process.env.SQUARECLOUD_DESCRIPTION || "");
+}
+
+function buildLocalBootstrapFromEnv(reason) {
+  return {
+    ok: true,
+    offlineBootstrap: true,
+    offlineBootstrapReason: String(reason?.message || reason || "manager indisponivel"),
+    instance: {
+      id: process.env.INSTANCE_ID || "",
+      status: process.env.INSTANCE_STATUS || "provisioning",
+      expiresAt: process.env.INSTANCE_EXPIRES_AT || "",
+      hostingProvider: "squarecloud",
+      hostingAccountId: process.env.SQUARECLOUD_ACCOUNT_ID || "",
+      hostingAppId: process.env.SQUARECLOUD_APP_ID || process.env.SQUARECLOUD_APPLICATION_ID || "",
+      saleSequenceNumber: process.env.TENANT_SALE_SEQUENCE_NUMBER || "",
+      saleSequenceLabel: process.env.TENANT_SALE_SEQUENCE_LABEL || "",
+      soldAt: process.env.TENANT_SOLD_AT || "",
+      managedDescription: process.env.SQUARECLOUD_DESCRIPTION || "",
+    },
+    tenant: {
+      customerId: process.env.TENANT_CUSTOMER_ID || "",
+      subscriptionId: process.env.TENANT_SUBSCRIPTION_ID || "",
+      customerDiscordUserId: process.env.TENANT_CUSTOMER_DISCORD_USER_ID || process.env.TENANT_BOT_OWNER_DISCORD_USER_ID || "",
+      customerDiscordUsername: process.env.TENANT_CUSTOMER_DISCORD_USERNAME || "",
+      commercialOwnerDiscordUserId: process.env.TENANT_COMMERCIAL_OWNER_DISCORD_USER_ID || "",
+      purchaserDiscordUserId: process.env.TENANT_PURCHASER_DISCORD_USER_ID || "",
+      purchaserDiscordUsername: process.env.TENANT_PURCHASER_DISCORD_USERNAME || "",
+      botOwnerDiscordUserId: process.env.TENANT_BOT_OWNER_DISCORD_USER_ID || process.env.TENANT_CUSTOMER_DISCORD_USER_ID || "",
+      assignedGuildId: process.env.TENANT_ASSIGNED_GUILD_ID || "",
+      assignedGuildUrl: process.env.TENANT_ASSIGNED_GUILD_URL || "",
+      defaultGuildId: process.env.TENANT_DEFAULT_GUILD_ID || process.env.DEFAULT_GUILD_ID || process.env.GUILD_ID || "",
+      defaultGuildUrl: process.env.TENANT_DEFAULT_GUILD_URL || "",
+      installUrl: process.env.TENANT_INSTALL_URL || "",
+      productSlug: process.env.TENANT_PRODUCT_SLUG || process.env.SOURCE_SLUG || process.env.INSTANCE_SOURCE_SLUG || "",
+      productName: process.env.TENANT_PRODUCT_NAME || process.env.SOURCE_SLUG || "",
+      planName: process.env.TENANT_PLAN_NAME || "",
+    },
+    config: {
+      discordAppName: process.env.DISCORD_APP_NAME || "",
+      discordClientId: process.env.DISCORD_CLIENT_ID || process.env.CLIENT_ID || "",
+      discordApplicationId: process.env.DISCORD_APPLICATION_ID || process.env.APPLICATION_ID || "",
+    },
+  };
 }
 
 function buildRuntimeSummary(payload) {
@@ -295,6 +390,7 @@ function logRuntimeSummary(label, payload) {
 
 function spawnBotProcess() {
   const entrypoint = resolveEntrypoint();
+  ensureRuntimeDependencies();
   printSection("Iniciando aplicacao vendida", [
     "Arquivo inicial da aplicacao: " + formatValue(entrypoint),
     "PID do processo gerenciador: " + process.pid,
@@ -369,15 +465,28 @@ async function sendHeartbeat() {
 }
 
 async function main() {
-  const bootstrap = await postJson("/internal/instances/bootstrap", {
-    instanceId,
-    instanceSecret,
-  });
+  let bootstrap;
+  try {
+    bootstrap = await postJson("/internal/instances/bootstrap", {
+      instanceId,
+      instanceSecret,
+    });
+  } catch (error) {
+    bootstrap = buildLocalBootstrapFromEnv(error);
+    printSection("Manager indisponivel; usando bootstrap local", [
+      formatError(error),
+      "A aplicacao vendida vai iniciar com as variaveis gravadas no deploy.",
+    ]);
+  }
 
   syncBootstrapEnv(bootstrap);
   logRuntimeSummary("Contexto recebido da aplicacao vendida", bootstrap);
   spawnBotProcess();
-  await sendHeartbeat();
+  await sendHeartbeat().catch((error) => {
+    printSection("Heartbeat inicial falhou; mantendo aplicacao ligada", [
+      formatError(error),
+    ]);
+  });
 
   const interval = setInterval(() => {
     sendHeartbeat().catch((error) => {

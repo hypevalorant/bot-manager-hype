@@ -44,6 +44,7 @@ function limitPayload(value, maxLength = 8000) {
 }
 
 function isInaccessibleSquareCloudAppError(error) {
+  const status = Number(error?.status ?? error?.body?.status ?? 0) || 0;
   const normalized = [
     error?.code,
     error?.status,
@@ -55,11 +56,12 @@ function isInaccessibleSquareCloudAppError(error) {
     .map((value) => String(value ?? "").trim().toUpperCase())
     .filter(Boolean)
     .join(" ");
-  return normalized.includes("ACCESS_DENIED") ||
+  return status === 404 ||
     normalized.includes("APP_NOT_FOUND") ||
-    normalized.includes("INVALID USER DATA") ||
-    normalized.includes("RESPONDEU 401") ||
-    normalized.includes("RESPONDEU 404");
+    normalized.includes("NOT_FOUND") ||
+    normalized.includes("RESPONDEU 404") ||
+    normalized.includes("NAO ENCONTRADA") ||
+    normalized.includes("NÃO ENCONTRADA");
 }
 
 class ProvisioningWorker {
