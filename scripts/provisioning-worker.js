@@ -24,7 +24,8 @@ function sleep(milliseconds) {
 }
 
 function requiredEnv(name, fallback = "") {
-  const value = String(process.env[name] ?? fallback).trim();
+  const rawValue = String(process.env[name] ?? "").trim();
+  const value = rawValue || String(fallback ?? "").trim();
   if (!value) {
     throw new Error(`${name} nao configurado.`);
   }
