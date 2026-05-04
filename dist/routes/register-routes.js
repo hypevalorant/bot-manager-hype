@@ -709,7 +709,7 @@ async function registerRoutes(app, services) {
         for (const instance of Array.isArray(services.store.instances) ? services.store.instances : []) {
             const hostingAppId = String(instance?.hostingAppId ?? "").trim();
             const status = String(instance?.status ?? "").trim().toLowerCase();
-            if (!hostingAppId.startsWith("pending-") || activeInstanceIds.has(instance.id) || !["queued", "failed", "provisioning"].includes(status)) {
+            if (!hostingAppId.startsWith("pending-") || activeInstanceIds.has(instance.id) || ["deleted", "suspended"].includes(status)) {
                 continue;
             }
             const discordApp = services.store.discordApps.find((entry) => entry.id === instance.discordAppId);
@@ -780,6 +780,139 @@ async function registerRoutes(app, services) {
             runtimeSourceConfig: services.managerRuntimeConfigService.getRuntimeSourceConfig(instance.sourceSlug) ?? null,
             managerApiUrl: services.managerRuntimeConfigService.getResolvedAppBaseUrl(request) ?? null,
         });
+    });
+    app.get("/internal/provisioning/diagnostics", async (request, reply) => {
+        try {
+            requireProvisioningWorkerAccess(request);
+        }
+        catch (error) {
+            return sendSecurityError(reply, error);
+        }
+        const jobs = Array.isArray(services.store.provisioningJobs) ? services.store.provisioningJobs : [];
+        const instances = Array.isArray(services.store.instances) ? services.store.instances : [];
+        const discordApps = Array.isArray(services.store.discordApps) ? services.store.discordApps : [];
+        const pendingInstances = instances
+            .filter((instance) => String(instance?.hostingAppId ?? "").trim().startsWith("pending-"))
+            .map((instance) => {
+            const discordApp = discordApps.find((entry) => entry.id === instance.discordAppId);
+            const matchingJobs = jobs.filter((job) => job.instanceId === instance.id).map((job) => ({
+                id: job.id,
+                status: job.status,
+                attempts: job.attempts,
+                reason: job.reason,
+                lastError: job.lastError,
+                lockedBy: job.lockedBy,
+                lockExpiresAt: job.lockExpiresAt,
+                nextRunAt: job.nextRunAt,
+                updatedAt: job.updatedAt,
+            }));
+            return {
+                id: instance.id,
+                name: instance.name,
+                status: instance.status,
+                hostingAppId: instance.hostingAppId,
+                sourceSlug: instance.sourceSlug,
+                discordAppId: instance.discordAppId,
+                hasDiscordApp: Boolean(discordApp),
+                hasBotToken: Boolean(discordApp?.botToken),
+                discordAppSource: discordApp?.source ?? null,
+                jobCount: matchingJobs.length,
+                jobs: matchingJobs,
+                updatedAt: instance.updatedAt,
+            };
+        });
+        return reply.send({
+            ok: true,
+            now: new Date().toISOString(),
+            jobCounts: jobs.reduce((accumulator, job) => {
+                const status = String(job?.status ?? "unknown").trim() || "unknown";
+                accumulator[status] = (accumulator[status] ?? 0) + 1;
+                return accumulator;
+            }, {}),
+            recentJobs: [...jobs]
+                .sort((left, right) => Date.parse(String(right.updatedAt ?? right.createdAt ?? 0)) - Date.parse(String(left.updatedAt ?? left.createdAt ?? 0)))
+                .slice(0, 10)
+                .map((job) => ({
+                id: job.id,
+                instanceId: job.instanceId,
+                discordAppId: job.discordAppId,
+                sourceSlug: job.sourceSlug,
+                status: job.status,
+                attempts: job.attempts,
+                reason: job.reason,
+                lastError: job.lastError,
+                result: job.result,
+                lockedBy: job.lockedBy,
+                lockExpiresAt: job.lockExpiresAt,
+                nextRunAt: job.nextRunAt,
+                createdAt: job.createdAt,
+                updatedAt: job.updatedAt,
+            })),
+            pendingInstances,
+        });
+    });
+    app.post("/internal/provisioning/requeue", async (request, reply) => {
+        try {
+            requireProvisioningWorkerAccess(request);
+        }
+        catch (error) {
+            return sendSecurityError(reply, error);
+        }
+        const body = request.body ?? {};
+        const instanceId = String(body.instanceId ?? "").trim();
+        const hostingAppId = String(body.hostingAppId ?? body.appId ?? "").trim();
+        const instances = Array.isArray(services.store.instances) ? services.store.instances : [];
+        const instance = instances.find((entry) => (instanceId && entry.id === instanceId) ||
+            (hostingAppId && String(entry.hostingAppId ?? "").trim() === hostingAppId));
+        if (!instance) {
+            return reply.status(404).send({ error: "Instancia nao encontrada para re-enfileirar." });
+        }
+        const discordApp = services.store.discordApps.find((entry) => entry.id === instance.discordAppId);
+        if (!discordApp?.botToken) {
+            return reply.status(409).send({ error: "Instancia nao possui app Discord com token salvo." });
+        }
+        const now = new Date().toISOString();
+        const jobs = Array.isArray(services.store.provisioningJobs) ? services.store.provisioningJobs : [];
+        services.store.provisioningJobs = jobs;
+        for (const job of jobs.filter((entry) => entry.instanceId === instance.id && ["queued", "retry", "processing"].includes(String(entry.status ?? "").toLowerCase()))) {
+            job.status = "cancelled";
+            job.lastError = "Cancelado por re-enfileiramento manual.";
+            job.lockExpiresAt = null;
+            job.updatedAt = now;
+        }
+        const job = {
+            id: (0, utils_js_1.makeId)(),
+            type: "squarecloud_provision",
+            instanceId: instance.id,
+            discordAppId: discordApp.id,
+            sourceSlug: instance.sourceSlug,
+            status: "queued",
+            attempts: 0,
+            maxAttempts: Number(process.env.PROVISIONING_WORKER_MAX_ATTEMPTS ?? 8) || 8,
+            lockedBy: null,
+            lockedAt: null,
+            lockExpiresAt: null,
+            lastError: null,
+            result: null,
+            reason: String(body.reason ?? "manual_requeue").trim().slice(0, 120) || "manual_requeue",
+            nextRunAt: now,
+            createdAt: now,
+            updatedAt: now,
+        };
+        jobs.push(job);
+        const preserveHostingAppId = body.preserveHostingAppId === true && hostingAppId && !hostingAppId.startsWith("pending-");
+        instance.hostingAppId = preserveHostingAppId ? hostingAppId : `pending-${(0, utils_js_1.makeId)().replace(/-/gu, "").slice(0, 12)}`;
+        instance.status = "queued";
+        instance.updatedAt = now;
+        instance.config = {
+            ...(instance.config ?? {}),
+            lastProvisioningError: null,
+            lastProvisioningErrorAt: null,
+            provisioningQueueJobId: job.id,
+            previousInaccessibleHostingAppId: preserveHostingAppId ? String(instance.config?.previousInaccessibleHostingAppId ?? "").trim() || null : hostingAppId || String(instance.config?.previousInaccessibleHostingAppId ?? "").trim() || null,
+        };
+        await services.store.flush?.().catch(() => null);
+        return reply.send({ ok: true, job, instance: (0, serializers_js_1.sanitizeInstance)(instance, { includeConfig: true }) });
     });
     app.post("/internal/provisioning/jobs/:jobId/complete", async (request, reply) => {
         try {

@@ -43,6 +43,25 @@ function limitPayload(value, maxLength = 8000) {
   };
 }
 
+function isInaccessibleSquareCloudAppError(error) {
+  const normalized = [
+    error?.code,
+    error?.status,
+    error?.message,
+    error?.body?.code,
+    error?.body?.message,
+    error?.body?.error,
+  ]
+    .map((value) => String(value ?? "").trim().toUpperCase())
+    .filter(Boolean)
+    .join(" ");
+  return normalized.includes("ACCESS_DENIED") ||
+    normalized.includes("APP_NOT_FOUND") ||
+    normalized.includes("INVALID USER DATA") ||
+    normalized.includes("RESPONDEU 401") ||
+    normalized.includes("RESPONDEU 404");
+}
+
 class ProvisioningWorker {
   constructor() {
     readDotEnv();
@@ -128,7 +147,7 @@ class ProvisioningWorker {
       return;
     }
     const partialAppId = String(error?.squareCloudAppId ?? "").trim();
-    if (partialAppId) {
+    if (partialAppId && !isInaccessibleSquareCloudAppError(error)) {
       console.error(`[worker] app criada parcialmente job=${job.id} app=${partialAppId}`);
       await this.managerRequest(`/internal/provisioning/jobs/${encodeURIComponent(job.id)}/complete`, {
         method: "POST",
