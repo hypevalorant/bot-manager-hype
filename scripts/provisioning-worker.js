@@ -106,6 +106,8 @@ class ProvisioningWorker {
       method: "POST",
       body: JSON.stringify({
         workerId: this.workerId,
+        jobId: String(process.env.PROVISIONING_WORKER_JOB_ID ?? "").trim() || undefined,
+        instanceId: String(process.env.PROVISIONING_WORKER_INSTANCE_ID ?? "").trim() || undefined,
         lockTtlSeconds: Number(process.env.PROVISIONING_WORKER_LOCK_TTL_SECONDS ?? 900) || 900,
       }),
     });
@@ -134,7 +136,7 @@ class ProvisioningWorker {
         appId: result.appId,
         upload: limitPayload(result.upload, 3000),
         boot: limitPayload(result.boot, 5000),
-        instanceStatus: "provisioning",
+        instanceStatus: result.boot?.running ? "running" : "provisioning",
       }),
     });
     console.log(`[worker] concluido job=${job.id} app=${result.appId}`);
