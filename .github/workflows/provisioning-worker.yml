@@ -50,6 +50,8 @@ jobs:
           SQUARECLOUD_API_BASE_URL: https://api.squarecloud.app/v2
           SOURCE_ARTIFACTS_DIR: runtime-artifacts
           PROVISIONING_WORKER_ID: github-actions-${{ github.run_id }}
+          PROVISIONING_WORKER_JOB_ID: ${{ inputs.job_id }}
+          PROVISIONING_WORKER_INSTANCE_ID: ${{ inputs.instance_id }}
           PROVISIONING_WORKER_MAX_TICKS: 12
           PROVISIONING_WORKER_POLL_MS: 10000
         run: npm run worker:provisioning
