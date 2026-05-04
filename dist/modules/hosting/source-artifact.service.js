@@ -24,6 +24,7 @@ const EXCLUDED_DIR_NAMES = new Set([
 const EXCLUDED_FILE_NAMES = new Set([
     "squarecloud.app",
     "manager-runtime.js",
+    "package-lock.json",
 ]);
 class SourceArtifactService {
     artifactsDir;
@@ -216,6 +217,10 @@ class SourceArtifactService {
             const existingConfig = archive.getEntry("squarecloud.app");
             if (existingConfig) {
                 archive.deleteFile("squarecloud.app");
+            }
+            const existingLockfile = archive.getEntry("package-lock.json");
+            if (existingLockfile) {
+                archive.deleteFile("package-lock.json");
             }
             archive.addFile("squarecloud.app", Buffer.from(this.buildSquareCloudConfig(sourceSlug, runtimeOptions), "utf8"));
             fileBuffer = new Uint8Array(archive.toBuffer());
