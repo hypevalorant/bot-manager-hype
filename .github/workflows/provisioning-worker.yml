@@ -10,8 +10,6 @@ on:
       - "dist/**"
       - "runtime-artifacts/**"
       - "package*.json"
-  schedule:
-    - cron: "*/5 * * * *"
   workflow_dispatch:
     inputs:
       job_id:
