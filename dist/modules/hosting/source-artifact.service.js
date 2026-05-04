@@ -108,16 +108,6 @@ class SourceArtifactService {
                 error: `Arquivo nao encontrado em ${explicitPath}.`,
             };
         }
-        const githubSource = this.getGitHubSourceConfig(sourceSlug, runtimeSourceConfig);
-        if (githubSource) {
-            return {
-                mode: "github_archive",
-                sourcePath: githubSource.sourceLabel,
-                artifactPath: this.getGeneratedArtifactPath(sourceSlug),
-                envKey: githubSource.envKey,
-                github: githubSource,
-            };
-        }
         const projectDir = this.resolveConfiguredPath(runtimeSourceConfig.projectDir ?? this.readEnvValue(projectDirKey));
         if (projectDir && (0, node_fs_1.existsSync)(projectDir)) {
             return {
@@ -145,6 +135,16 @@ class SourceArtifactService {
                 warning: projectDir
                     ? `Pasta configurada em ${projectDirKey} nao foi encontrada em ${projectDir}. Usando o zip padrao ${bundledZip}.`
                     : undefined,
+            };
+        }
+        const githubSource = this.getGitHubSourceConfig(sourceSlug, runtimeSourceConfig);
+        if (githubSource) {
+            return {
+                mode: "github_archive",
+                sourcePath: githubSource.sourceLabel,
+                artifactPath: this.getGeneratedArtifactPath(sourceSlug),
+                envKey: githubSource.envKey,
+                github: githubSource,
             };
         }
         if (projectDir) {
@@ -320,6 +320,7 @@ class SourceArtifactService {
         const requestUrl = githubSource.archiveUrl ??
             `https://api.github.com/repos/${githubSource.repo}/zipball/${encodeURIComponent(githubSource.ref ?? "main")}`;
         let currentUrl = requestUrl;
+        const timeoutMs = Math.max(5_000, Number(process.env.SOURCE_GITHUB_DOWNLOAD_TIMEOUT_MS ?? 30_000) || 30_000);
         let headers = {
             Accept: "application/vnd.github+json",
             "User-Agent": "bot-manager-saas",
@@ -328,11 +329,27 @@ class SourceArtifactService {
             headers.Authorization = `Bearer ${githubSource.token}`;
         }
         for (let redirectCount = 0; redirectCount < 5; redirectCount += 1) {
-            const response = await fetch(currentUrl, {
-                method: "GET",
-                headers,
-                redirect: "manual",
-            });
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), timeoutMs);
+            timeout.unref?.();
+            let response;
+            try {
+                response = await fetch(currentUrl, {
+                    method: "GET",
+                    headers,
+                    redirect: "manual",
+                    signal: controller.signal,
+                });
+            }
+            catch (error) {
+                if (error?.name === "AbortError") {
+                    throw new Error(`Timeout de ${timeoutMs}ms ao baixar ${githubSource.sourceLabel} do GitHub.`);
+                }
+                throw error;
+            }
+            finally {
+                clearTimeout(timeout);
+            }
             if ([301, 302, 303, 307, 308].includes(response.status)) {
                 const location = response.headers.get("location");
                 if (!location) {

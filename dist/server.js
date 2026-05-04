@@ -37,6 +37,7 @@ async function main() {
     const expirationCheckIntervalMs = Math.max(0, Number(process.env.EXPIRATION_CHECK_INTERVAL_SECONDS ?? 300) * 1000);
     const provisioningCheckIntervalMs = Math.max(0, Number(process.env.PROVISIONING_MANAGER_INTERVAL_SECONDS ?? 45) * 1000);
     const provisioningMaxJobsPerCycle = Math.max(1, Number(process.env.PROVISIONING_MANAGER_MAX_JOBS ?? 1) || 1);
+    const externalDispatchGraceMs = Math.max(30, Number(process.env.PROVISIONING_EXTERNAL_DISPATCH_GRACE_SECONDS ?? 120) || 120) * 1000;
     let expirationTimer = null;
     let provisioningTimer = null;
     let provisioningCycleRunning = false;
@@ -87,13 +88,27 @@ async function main() {
                 activeInstanceIds.add(instance.id);
             }
             if (isExternalProvisioningMode()) {
+                let waitingForExternalWorker = false;
                 for (const job of jobs.filter((entry) => ["queued", "retry"].includes(String(entry?.status ?? "").toLowerCase()))) {
-                    if (!job.lastDispatchAt || String(job.lastDispatchStatus ?? "") === "failed") {
-                        await services.instanceService.triggerProvisioningWorker(job).catch(() => false);
+                    const lastDispatchAt = Date.parse(String(job.lastDispatchAt ?? 0)) || 0;
+                    const dispatchStatus = String(job.lastDispatchStatus ?? "").toLowerCase();
+                    const recentlyDispatched = dispatchStatus === "dispatched" &&
+                        lastDispatchAt > 0 &&
+                        now.getTime() - lastDispatchAt < externalDispatchGraceMs;
+                    if (recentlyDispatched) {
+                        waitingForExternalWorker = true;
+                        continue;
+                    }
+                    const dispatched = await services.instanceService.triggerProvisioningWorker(job).catch(() => false);
+                    if (dispatched) {
+                        waitingForExternalWorker = true;
                     }
                 }
                 await services.store.flush?.().catch(() => null);
-                return;
+                if (waitingForExternalWorker) {
+                    return;
+                }
+                logger.warn("Worker externo de provisionamento indisponivel; usando fallback direto no manager.");
             }
             const dueJobs = jobs
                 .filter((job) => ["queued", "retry", "processing"].includes(String(job?.status ?? "").toLowerCase()))
