@@ -182,25 +182,25 @@ class SourceArtifactService {
     async getArtifact(sourceSlug, overrides = {}) {
         const resolution = this.resolveArtifact(sourceSlug);
         if (resolution.mode === "zip" && resolution.artifactPath) {
-            return this.readArtifactFile(resolution.artifactPath, sourceSlug, overrides);
+            return await this.readArtifactFile(resolution.artifactPath, sourceSlug, overrides);
         }
         if (resolution.mode === "project_directory" && resolution.sourcePath) {
             const artifactPath = await this.buildArtifactFromProjectDirectory(sourceSlug, resolution.sourcePath, overrides);
-            return this.readArtifactFile(artifactPath);
+            return await this.readArtifactFile(artifactPath);
         }
         if (resolution.mode === "github_archive" && resolution.github) {
             try {
                 const artifactPath = await this.buildArtifactFromGitHubArchive(sourceSlug, resolution.github, overrides);
-                return this.readArtifactFile(artifactPath);
+                return await this.readArtifactFile(artifactPath);
             }
             catch (error) {
                 const generatedZip = this.getGeneratedArtifactPath(sourceSlug);
                 if ((0, node_fs_1.existsSync)(generatedZip)) {
-                    return this.readArtifactFile(generatedZip);
+                    return await this.readArtifactFile(generatedZip);
                 }
                 const bundledZip = this.getBundledArtifactPath(sourceSlug);
                 if ((0, node_fs_1.existsSync)(bundledZip)) {
-                    return this.readArtifactFile(bundledZip);
+                    return await this.readArtifactFile(bundledZip);
                 }
                 throw error;
             }
@@ -208,28 +208,41 @@ class SourceArtifactService {
         throw new Error(resolution.error ??
             `Artefato da source ${sourceSlug} nao encontrado. Configure um zip em ${this.artifactsDir}, defina SOURCE_PROJECT_DIR_${(0, utils_js_1.normalizeEnvKeyPart)(sourceSlug)} ou uma origem do GitHub.`);
     }
-    readArtifactFile(artifactPath, sourceSlug = null, overrides = {}) {
+    async readArtifactFile(artifactPath, sourceSlug = null, overrides = {}) {
         const resolvedArtifactPath = (0, node_path_1.resolve)(artifactPath);
         let fileBuffer = new Uint8Array((0, node_fs_1.readFileSync)(resolvedArtifactPath));
         if (sourceSlug) {
             const runtimeOptions = this.getRuntimeOptions(sourceSlug, overrides);
-            const archive = new AdmZip(Buffer.from(fileBuffer));
-            const existingConfig = archive.getEntry("squarecloud.app");
-            if (existingConfig) {
-                archive.deleteFile("squarecloud.app");
-            }
-            const existingLockfile = archive.getEntry("package-lock.json");
-            if (existingLockfile) {
-                archive.deleteFile("package-lock.json");
-            }
-            archive.addFile("squarecloud.app", Buffer.from(this.buildSquareCloudConfig(sourceSlug, runtimeOptions), "utf8"));
-            fileBuffer = new Uint8Array(archive.toBuffer());
+            fileBuffer = await this.rebuildZipWithRuntimeConfig(fileBuffer, sourceSlug, runtimeOptions);
         }
         return {
             path: resolvedArtifactPath,
             fileName: (0, node_path_1.basename)(resolvedArtifactPath),
             fileBuffer,
         };
+    }
+    async rebuildZipWithRuntimeConfig(fileBuffer, sourceSlug, runtimeOptions) {
+        const archive = new AdmZip(Buffer.from(fileBuffer));
+        const zipFile = new yazl_1.ZipFile();
+        const addedPaths = new Set();
+        const entries = archive
+            .getEntries()
+            .filter((entry) => !entry.isDirectory)
+            .sort((left, right) => String(left.entryName ?? "").localeCompare(String(right.entryName ?? "")));
+        for (const entry of entries) {
+            const relativePath = String(entry.entryName ?? "").replaceAll("\\", "/").replace(/^\/+/g, "");
+            if (!relativePath || relativePath === "squarecloud.app" || addedPaths.has(relativePath)) {
+                continue;
+            }
+            zipFile.addBuffer(entry.getData(), relativePath);
+            addedPaths.add(relativePath);
+        }
+        zipFile.addBuffer(Buffer.from(this.buildSquareCloudConfig(sourceSlug, runtimeOptions), "utf8"), "squarecloud.app");
+        const chunks = [];
+        zipFile.outputStream.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+        zipFile.end();
+        await (0, node_events_1.once)(zipFile.outputStream, "end");
+        return new Uint8Array(Buffer.concat(chunks));
     }
     async buildArtifactFromProjectDirectory(sourceSlug, projectDir, overrides) {
         const resolvedProjectDir = (0, node_path_1.resolve)(projectDir);
